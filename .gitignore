@@ -1,0 +1,3 @@
+# Inventory output contains tenant data (users, mailboxes, permissions). Never commit it.
+Inventory-*/
+*.csv
