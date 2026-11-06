@@ -94,7 +94,7 @@ Connect-ExchangeOnline -ShowBanner:$false
 if ($spoAvailable) {
     Write-Step "Connecting to SharePoint Online ($SharePointAdminUrl)"
     try {
-        Connect-SPOService -Url $SharePointAdminUrl
+        Connect-SPOService -Url $SharePointAdminUrl -UseSystemBrowser:$true
     }
     catch {
         Write-Warning "Could not connect to SharePoint Online: $($_.Exception.Message). SharePoint and OneDrive storage will be skipped."
