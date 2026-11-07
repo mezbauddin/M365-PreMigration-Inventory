@@ -1,3 +1,4 @@
-# Inventory output contains tenant data (users, mailboxes, permissions). Never commit it.
+# Script output contains tenant data (users, mailboxes, permissions, passwords). Never commit it.
 Inventory-*/
 *.csv
+TargetBuild-*
