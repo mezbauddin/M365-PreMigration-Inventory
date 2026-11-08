@@ -45,9 +45,11 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-08
     Changelog:
+      1.0.2  Clears the legacy allow and block lists in separate calls (Exchange rejects both at once) and only
+             reports Fixed when Exchange accepts the change. Reads list values whether they come back as a string or a collection.
       1.0.1  -TenantId: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused.
       1.0.0  First release.
     Licence : MIT
@@ -89,11 +91,13 @@ Write-Host "Tenant: $tenant" -ForegroundColor Cyan
 
 # ------------------------------------------------------------------ 1. tenant switch and app ID allow list
 $org = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
-$allowed = @("$($org.EwsAllowedAppIDs)" -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# Exchange can return the list as one comma-separated string or as a collection. Handle both.
+function Get-Values($v) { @(@($v) | ForEach-Object { "$_" -split '[,;\s]+' } | ForEach-Object { $_.Trim('{}', ' ') } | Where-Object { $_ }) }
+$allowed = Get-Values $org.EwsAllowedAppIDs
 
 if ($org.EwsEnabled -eq $true) { Add-Finding 'Tenant' 'EwsEnabled' 'OK' 'True' }
 elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Enable EWS')) {
-    Set-OrganizationConfig -EwsEnabled $true
+    Set-OrganizationConfig -EwsEnabled $true -ErrorAction Stop
     Add-Finding 'Tenant' 'EwsEnabled' 'Fixed' 'Set to True'
 }
 else { Add-Finding 'Tenant' 'EwsEnabled' 'Problem' "Is '$($org.EwsEnabled)'. EWS is off for the whole tenant" }
@@ -101,32 +105,48 @@ else { Add-Finding 'Tenant' 'EwsEnabled' 'Problem' "Is '$($org.EwsEnabled)'. EWS
 if ($allowed -contains $AppId) { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'OK' "$AppId is on the list" }
 elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, "Add $AppId to EwsAllowedAppIDs")) {
     # The parameter replaces the whole list, so keep what's already there.
-    Set-OrganizationConfig -EwsAllowedAppIDs ((@($allowed) + $AppId | Select-Object -Unique) -join ',')
+    Set-OrganizationConfig -EwsAllowedAppIDs ((@($allowed) + $AppId | Select-Object -Unique) -join ',') -ErrorAction Stop
     Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Fixed' "Added $AppId (kept $($allowed.Count) existing)"
 }
 else { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Problem' "$AppId isn't on the list. Current: $($allowed -join ', ')" }
 
 # ------------------------------------------------------------------ 2. old user-agent policy left behind
-$legacy = $org.EwsApplicationAccessPolicy -or $org.EwsAllowList -or $org.EwsBlockList
-if (-not $legacy) { Add-Finding 'Tenant' 'Legacy policy' 'OK' 'No user-agent policy, allow list or block list' }
+$legacyPolicy = "$($org.EwsApplicationAccessPolicy)".Trim()
+$legacyAllow  = Get-Values $org.EwsAllowList
+$legacyBlock  = Get-Values $org.EwsBlockList
+if (-not ($legacyPolicy -or $legacyAllow -or $legacyBlock)) {
+    Add-Finding 'Tenant' 'Legacy policy' 'OK' 'No user-agent policy, allow list or block list'
+}
 elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Clear the legacy EWS user-agent policy and lists')) {
-    Set-OrganizationConfig -EwsApplicationAccessPolicy $null -EwsAllowList $null -EwsBlockList $null
-    Add-Finding 'Tenant' 'Legacy policy' 'Fixed' 'Cleared. Record the old values if anything else relied on them'
+    $was = "policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'"
+    try {
+        # Exchange refuses EwsAllowList and EwsBlockList in the same call, so clear them one at a time.
+        if ($legacyAllow)  { Set-OrganizationConfig -EwsAllowList $null -ErrorAction Stop }
+        if ($legacyBlock)  { Set-OrganizationConfig -EwsBlockList $null -ErrorAction Stop }
+        if ($legacyPolicy) { Set-OrganizationConfig -EwsApplicationAccessPolicy $null -ErrorAction Stop }
+        Add-Finding 'Tenant' 'Legacy policy' 'Fixed' "Cleared. Was $was"
+    }
+    catch { Add-Finding 'Tenant' 'Legacy policy' 'Problem' "Couldn't clear ($was): $($_.Exception.Message)" }
 }
 else {
-    Add-Finding 'Tenant' 'Legacy policy' 'Warning' ("Policy '{0}', allow '{1}', block '{2}'. These match user agents, not app IDs, and can still block your tool" -f
-        $org.EwsApplicationAccessPolicy, ($org.EwsAllowList -join ';'), ($org.EwsBlockList -join ';'))
+    Add-Finding 'Tenant' 'Legacy policy' 'Warning' "Policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'. These match user agents, not app IDs, and can still block your tool"
 }
 
 # ------------------------------------------------------------------ 3. mailboxes with EWS off on their own
 $cas = if ($Mailbox) { $Mailbox | ForEach-Object { Get-CASMailbox -Identity $_ } } else { Get-CASMailbox -ResultSize Unlimited }
-$blocked = @($cas | Where-Object { $_.EwsEnabled -eq $false -or $_.EwsApplicationAccessPolicy -or $_.EwsAllowList -or $_.EwsBlockList })
+$blocked = @($cas | Where-Object { $_.EwsEnabled -eq $false -or "$($_.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $_.EwsAllowList) -or (Get-Values $_.EwsBlockList) })
 if (-not $blocked) { Add-Finding 'Mailboxes' "$(@($cas).Count) checked" 'OK' 'None block EWS on their own' }
 foreach ($c in $blocked) {
     $why = "EwsEnabled '$($c.EwsEnabled)', policy '$($c.EwsApplicationAccessPolicy)', allow '$($c.EwsAllowList -join ';')', block '$($c.EwsBlockList -join ';')'"
     if ($Fix -and $PSCmdlet.ShouldProcess($c.PrimarySmtpAddress, 'Re-enable EWS and clear mailbox-level lists')) {
-        Set-CASMailbox -Identity $c.Identity -EwsEnabled $true -EwsApplicationAccessPolicy $null -EwsAllowList $null -EwsBlockList $null
-        Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Fixed' "Was $why"
+        try {
+            Set-CASMailbox -Identity $c.Identity -EwsEnabled $true -ErrorAction Stop
+            if (Get-Values $c.EwsAllowList) { Set-CASMailbox -Identity $c.Identity -EwsAllowList $null -ErrorAction Stop }
+            if (Get-Values $c.EwsBlockList) { Set-CASMailbox -Identity $c.Identity -EwsBlockList $null -ErrorAction Stop }
+            if ("$($c.EwsApplicationAccessPolicy)".Trim()) { Set-CASMailbox -Identity $c.Identity -EwsApplicationAccessPolicy $null -ErrorAction Stop }
+            Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Fixed' "Was $why"
+        }
+        catch { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' "Couldn't fix ($why): $($_.Exception.Message)" }
     }
     else { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' $why }
 }
