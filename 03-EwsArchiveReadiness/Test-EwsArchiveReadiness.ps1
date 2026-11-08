@@ -45,9 +45,10 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.3
+    Version : 1.0.4
     Date    : 2026-11-08
     Changelog:
+      1.0.4  Clears legacy rules by setting the policy to null, which removes both lists. Verified on a live tenant.
       1.0.3  An active legacy EnforceAllowList is reported as a Problem, not a Warning.
       1.0.2  Clears the legacy allow and block lists in separate calls (Exchange rejects both at once) and only
              reports Fixed when Exchange accepts the change. Reads list values whether they come back as a string or a collection.
@@ -121,10 +122,13 @@ if (-not ($legacyPolicy -or $legacyAllow -or $legacyBlock)) {
 elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Clear the legacy EWS user-agent policy and lists')) {
     $was = "policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'"
     try {
-        # Exchange refuses EwsAllowList and EwsBlockList in the same call, so clear them one at a time.
-        if ($legacyAllow)  { Set-OrganizationConfig -EwsAllowList $null -ErrorAction Stop }
-        if ($legacyBlock)  { Set-OrganizationConfig -EwsBlockList $null -ErrorAction Stop }
-        if ($legacyPolicy) { Set-OrganizationConfig -EwsApplicationAccessPolicy $null -ErrorAction Stop }
+        # Clearing the policy clears both lists with it. Exchange rejects a list change without a policy, and
+        # rejects both lists in one call, so this is the one command that works.
+        Set-OrganizationConfig -EwsApplicationAccessPolicy $null -ErrorAction Stop
+        $after = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
+        if ("$($after.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $after.EwsAllowList) -or (Get-Values $after.EwsBlockList)) {
+            throw "still set after the change: policy '$($after.EwsApplicationAccessPolicy)', allow '$((Get-Values $after.EwsAllowList) -join ';')', block '$((Get-Values $after.EwsBlockList) -join ';')'"
+        }
         Add-Finding 'Tenant' 'Legacy policy' 'Fixed' "Cleared. Was $was"
     }
     catch { Add-Finding 'Tenant' 'Legacy policy' 'Problem' "Couldn't clear ($was): $($_.Exception.Message)" }
@@ -144,9 +148,10 @@ foreach ($c in $blocked) {
     if ($Fix -and $PSCmdlet.ShouldProcess($c.PrimarySmtpAddress, 'Re-enable EWS and clear mailbox-level lists')) {
         try {
             Set-CASMailbox -Identity $c.Identity -EwsEnabled $true -ErrorAction Stop
-            if (Get-Values $c.EwsAllowList) { Set-CASMailbox -Identity $c.Identity -EwsAllowList $null -ErrorAction Stop }
-            if (Get-Values $c.EwsBlockList) { Set-CASMailbox -Identity $c.Identity -EwsBlockList $null -ErrorAction Stop }
-            if ("$($c.EwsApplicationAccessPolicy)".Trim()) { Set-CASMailbox -Identity $c.Identity -EwsApplicationAccessPolicy $null -ErrorAction Stop }
+            # As at tenant level, clearing the policy clears the mailbox's allow and block lists with it.
+            if ("$($c.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $c.EwsAllowList) -or (Get-Values $c.EwsBlockList)) {
+                Set-CASMailbox -Identity $c.Identity -EwsApplicationAccessPolicy $null -ErrorAction Stop
+            }
             Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Fixed' "Was $why"
         }
         catch { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' "Couldn't fix ($why): $($_.Exception.Message)" }

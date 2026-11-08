@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.3 |
+| Version | 1.0.4 |
 | Released | 8 November 2026 |
 | Licence | MIT |
 
@@ -70,10 +70,10 @@ Each finding prints as OK, Fixed, Problem, Warning or Info, and the lot goes to 
 
 ## Lessons learnt
 
-- **Check both tenants.** The source has to let the tool read archives and the destination has to let it write them. One side right isn't enough.
+- **Check both tenants, and check which one you're in.** The source has to let the tool read archives and the destination has to let it write them. I 'confirmed' the fix twice in the same tenant and spent hours on the wrong side. That's why `-TenantId` exists.
 - **`EwsAllowedAppIDs` replaces the whole list.** Read it, add your ID, write it back. The script does this. A one-liner with a single ID wipes everything else that was allowed.
 - **Only one app on the list means only one app gets EWS.** If anything else in the tenant still uses EWS, such as a scanner, a CRM or an archiving add-on, add its app ID too. Check Admin centre > Reports > Usage > Exchange for EWS usage first.
-- **`EwsAllowList` and `EwsBlockList` can't be cleared in one command.** Exchange rejects it. Clear them one at a time.
+- **Clear the old rules by clearing the policy.** `Set-OrganizationConfig -EwsApplicationAccessPolicy $null` removes the policy and both lists. Clearing a list on its own fails ('EwsApplicationAccessPolicy must be specified'), and so does clearing both lists in one call.
 - **The old user-agent settings are a trap.** Plenty of blog posts still show `-EwsApplicationAccessPolicy EnforceAllowList -EwsAllowList`. That's what I set first. It isn't what Exchange checks for apps now.
 - **'Unauthorized' isn't always permissions.** My app had `full_access_as_app` the whole time. Check every layer, including per-mailbox EWS, before you re-consent anything.
 - **Don't keep kicking new archives.** `Start-ManagedFolderAssistant` on brand-new archives mostly returned timeouts for me. Waiting worked better. `-CheckArchives` tells you when they're ready.
@@ -83,6 +83,7 @@ Each finding prints as OK, Fixed, Problem, Warning or Info, and the lot goes to 
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.4 | 2026-11-08 | Clears legacy rules by setting `EwsApplicationAccessPolicy` to `$null`, which removes both lists in one go |
 | 1.0.3 | 2026-11-08 | An active legacy `EnforceAllowList` counts as a Problem. It blocks any app whose user agent isn't listed |
 | 1.0.2 | 2026-11-08 | Legacy allow and block lists cleared in separate calls, since Exchange rejects both at once. Only reports Fixed when Exchange accepts the change |
 | 1.0.1 | 2026-11-08 | `-TenantId`: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused |
