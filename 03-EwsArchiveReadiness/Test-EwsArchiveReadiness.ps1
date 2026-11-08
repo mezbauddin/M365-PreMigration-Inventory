@@ -45,9 +45,10 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.2
+    Version : 1.0.3
     Date    : 2026-11-08
     Changelog:
+      1.0.3  An active legacy EnforceAllowList is reported as a Problem, not a Warning.
       1.0.2  Clears the legacy allow and block lists in separate calls (Exchange rejects both at once) and only
              reports Fixed when Exchange accepts the change. Reads list values whether they come back as a string or a collection.
       1.0.1  -TenantId: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused.
@@ -129,7 +130,9 @@ elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Clear the legacy EWS user-ag
     catch { Add-Finding 'Tenant' 'Legacy policy' 'Problem' "Couldn't clear ($was): $($_.Exception.Message)" }
 }
 else {
-    Add-Finding 'Tenant' 'Legacy policy' 'Warning' "Policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'. These match user agents, not app IDs, and can still block your tool"
+    # EnforceAllowList only lets through clients whose user agent is on the list, so it blocks most apps outright.
+    $sev = if ($legacyPolicy -eq 'EnforceAllowList') { 'Problem' } else { 'Warning' }
+    Add-Finding 'Tenant' 'Legacy policy' $sev "Policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'. These match user agents, not app IDs, and can still block your tool"
 }
 
 # ------------------------------------------------------------------ 3. mailboxes with EWS off on their own

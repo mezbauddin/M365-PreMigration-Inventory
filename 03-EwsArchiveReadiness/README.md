@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.2 |
+| Version | 1.0.3 |
 | Released | 8 November 2026 |
 | Licence | MIT |
 
@@ -83,6 +83,7 @@ Each finding prints as OK, Fixed, Problem, Warning or Info, and the lot goes to 
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.3 | 2026-11-08 | An active legacy `EnforceAllowList` counts as a Problem. It blocks any app whose user agent isn't listed |
 | 1.0.2 | 2026-11-08 | Legacy allow and block lists cleared in separate calls, since Exchange rejects both at once. Only reports Fixed when Exchange accepts the change |
 | 1.0.1 | 2026-11-08 | `-TenantId`: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused |
 | 1.0.0 | 2026-11-08 | First release |
