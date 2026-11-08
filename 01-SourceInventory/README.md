@@ -9,7 +9,7 @@
 | Released | 4 November 2026 |
 | Licence | MIT |
 
-Part 1 of my [M365 tenant migration toolkit](../README.md). Next: [New-TargetMailboxes](../02-TargetMailboxes/) builds the destination from this inventory.
+Part 1 of my [M365 tenant-to-tenant migration toolkit](../README.md). Next: [New-TargetMailboxes](../02-TargetMailboxes/) builds the destination from this inventory.
 
 ## Why
 

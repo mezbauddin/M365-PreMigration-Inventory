@@ -9,7 +9,7 @@
 | Released | 7 November 2026 |
 | Licence | MIT |
 
-Part 2 of my [M365 tenant migration toolkit](../README.md). Part 1 is [Invoke-SourceTenantInventory](../01-SourceInventory/), which produces the `04-Mailboxes.csv` this script reads.
+Part 2 of my [M365 tenant-to-tenant migration toolkit](../README.md). Part 1 is [Invoke-SourceTenantInventory](../01-SourceInventory/), which produces the `04-Mailboxes.csv` this script reads.
 
 ## Why
 
@@ -90,15 +90,7 @@ Open the CSV before you apply it. Two things to look for:
 - **Passwords need their own permission.** `User.ReadWrite.All` isn't enough to set a password. The script asks for `User-PasswordProfile.ReadWrite.All` as well. If you've connected before, run `Disconnect-MgGraph` first so you get the consent prompt.
 - **Usage location before licence.** No usage location, no licence. The script sets it on its own, so a failed password step can't block licensing.
 - **New archives aren't instant.** `ArchiveStatus` says Active straight away, but the archive itself can take a while. `Get-EXOMailboxStatistics -Archive` returning nothing means it isn't ready yet.
-- **ShareGate archives need EWS, and the EWS allow list changed in October 2026.** Graph can't reach in-place archives, so ShareGate uses EWS for them. Microsoft now checks `EwsAllowedAppIDs`, not the old `EwsApplicationAccessPolicy` and `EwsAllowList`, which match on user agent. Set it in both tenants. The command replaces the whole list, so read it first:
-
-  ```powershell
-  $c   = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
-  $ids = @($c.EwsAllowedAppIDs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) +
-         'ce9858bf-0093-4723-9742-3af3b3c5e25a' | Select-Object -Unique   # ShareGate Migrate
-  Set-OrganizationConfig -EwsEnabled $true -EwsAllowedAppIDs ($ids -join ',')
-  ```
-
+- **Archive copies often need EWS, and the EWS allow list changed in October 2026.** Main mail can copy fine while every archive fails with 'Unauthorized'. [Test-EwsArchiveReadiness](../03-EwsArchiveReadiness/) checks and fixes the causes in both tenants.
 - **Shared mailbox destinations get email only in ShareGate.** Calendars and contacts copy once the mailbox is a user mailbox. Run an incremental after step 4.
 
 ## Notes

@@ -91,7 +91,7 @@
     Version : 2.0.0
     Date    : 2026-11-07
     Licence : MIT
-    Repo    : https://github.com/mezbauddin/M365-Tenant-Migration-Toolkit
+    Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Authentication, Microsoft.Graph.Users,
               Microsoft.Graph.Identity.DirectoryManagement. Run -Apply as a Global Admin of the DESTINATION.
     The passwords file written by -Apply is sensitive. Move it somewhere secure and delete the local copy.
