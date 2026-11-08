@@ -16,6 +16,10 @@
 .PARAMETER AppId
     The application (client) ID your migration tool uses for EWS.
 
+.PARAMETER TenantId
+    Optional tenant ID (GUID). Graph signs in to this tenant, and the script stops (and disconnects) if Exchange
+    is signed in to any other. Saves you fixing the wrong side of a migration.
+
 .PARAMETER Fix
     Correct what the checks find: enable EWS for the tenant, add AppId to EwsAllowedAppIDs (keeping what's already
     there), clear the old user-agent policy and allow list, and re-enable EWS on blocked mailboxes.
@@ -37,12 +41,15 @@
     .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000 -Fix -WhatIf
 
 .EXAMPLE
-    .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000 -Fix -CheckArchives
+    .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000 -TenantId 11111111-1111-1111-1111-111111111111 -Fix -CheckArchives
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-08
+    Changelog:
+      1.0.1  -TenantId: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused.
+      1.0.0  First release.
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x. For the consent check: Microsoft.Graph.Authentication and
@@ -53,6 +60,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$AppId,
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
     [switch]$Fix,
     [string[]]$Mailbox,
     [switch]$CheckArchives,
@@ -67,7 +75,15 @@ function Add-Finding($Area, $Target, $Status, $Detail) {
     Write-Host ("[{0}] {1}: {2} {3}" -f $Status, $Area, $Target, $Detail) -ForegroundColor $colour
 }
 
-if (-not (Get-ConnectionInformation -ErrorAction SilentlyContinue)) { Connect-ExchangeOnline -ShowBanner:$false }
+if (-not (Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected')) {
+    Connect-ExchangeOnline -ShowBanner:$false
+}
+$conn = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
+if ($TenantId -and $conn.TenantID -ne $TenantId) {
+    $wrong = $conn.TenantID
+    Disconnect-ExchangeOnline -Confirm:$false
+    throw "Exchange signed in to tenant $wrong, not $TenantId. Run the script again and sign in with an admin of the right tenant."
+}
 $tenant = (Get-AcceptedDomain | Where-Object Default).DomainName
 Write-Host "Tenant: $tenant" -ForegroundColor Cyan
 
@@ -118,7 +134,12 @@ foreach ($c in $blocked) {
 # ------------------------------------------------------------------ 4. does the app have EWS permission?
 if (-not $SkipConsentCheck) {
     try {
-        Connect-MgGraph -Scopes 'Application.Read.All' -NoWelcome
+        $ctx = Get-MgContext
+        if ($TenantId -and $ctx -and $ctx.TenantId -ne $TenantId) { Disconnect-MgGraph | Out-Null; $ctx = $null }
+        if (-not $ctx -or $ctx.Scopes -notcontains 'Application.Read.All') {
+            if ($TenantId) { Connect-MgGraph -TenantId $TenantId -Scopes 'Application.Read.All' -NoWelcome }
+            else { Connect-MgGraph -Scopes 'Application.Read.All' -NoWelcome }
+        }
         $sp  = Get-MgServicePrincipal -Filter "appId eq '$AppId'"
         $exo = Get-MgServicePrincipal -Filter "appId eq '00000002-0000-0ff1-ce00-000000000000'"   # Office 365 Exchange Online
         if (-not $sp) { Add-Finding 'Consent' $AppId 'Problem' 'No service principal. The app was never consented in this tenant' }

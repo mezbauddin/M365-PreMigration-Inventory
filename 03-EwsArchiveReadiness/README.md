@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Released | 8 November 2026 |
 | Licence | MIT |
 
@@ -55,6 +55,9 @@ Run it once per tenant. Connect to the source first, then repeat for the destina
 # Fix it, and check the archives are ready
 .\Test-EwsArchiveReadiness.ps1 -AppId <your-app-id> -Fix -CheckArchives
 
+# Pin it to a tenant, so you can't fix the wrong side of the migration
+.\Test-EwsArchiveReadiness.ps1 -AppId <your-app-id> -TenantId <tenant-guid> -Fix
+
 # Only a few mailboxes
 .\Test-EwsArchiveReadiness.ps1 -AppId <your-app-id> -Mailbox alex@contoso.com, docs@contoso.com
 ```
@@ -79,4 +82,5 @@ Each finding prints as OK, Fixed, Problem, Warning or Info, and the lot goes to 
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.1 | 2026-11-08 | `-TenantId`: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused |
 | 1.0.0 | 2026-11-08 | First release |
