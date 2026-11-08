@@ -92,7 +92,7 @@ Write-Host "Tenant: $tenant" -ForegroundColor Cyan
 # ------------------------------------------------------------------ 1. tenant switch and app ID allow list
 $org = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
 # Exchange can return the list as one comma-separated string or as a collection. Handle both.
-function Get-Values($v) { @(@($v) | ForEach-Object { "$_" -split '[,;\s]+' } | ForEach-Object { $_.Trim('{}', ' ') } | Where-Object { $_ }) }
+function Get-Values($v) { @(@($v) | ForEach-Object { "$_" -split '[,;\s]+' } | ForEach-Object { $_.Trim([char[]]'{} ') } | Where-Object { $_ }) }
 $allowed = Get-Values $org.EwsAllowedAppIDs
 
 if ($org.EwsEnabled -eq $true) { Add-Finding 'Tenant' 'EwsEnabled' 'OK' 'True' }
