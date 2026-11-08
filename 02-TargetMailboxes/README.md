@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 2.0.0 |
+| Version | 2.0.1 |
 | Released | 7 November 2026 |
 | Licence | MIT |
 
@@ -88,6 +88,7 @@ Open the CSV before you apply it. Two things to look for:
 
 - **`Set-MgUserLicense` and the empty `-RemoveLicenses`.** The Graph SDK drops the empty array and Graph returns 400, "missing removeLicenses". The script calls the `assignLicense` API directly.
 - **Passwords need their own permission.** `User.ReadWrite.All` isn't enough to set a password. The script asks for `User-PasswordProfile.ReadWrite.All` as well. If you've connected before, run `Disconnect-MgGraph` first so you get the consent prompt.
+- **Set the sign-in name on shared mailboxes.** `New-Mailbox -Shared` without `-MicrosoftOnlineServicesID` puts the sign-in name on the tenant's **default** domain, not the address you gave it. In a destination that's usually the customer's real domain. It can clash with existing users, it's what people end up signing in with when you convert them, and it sets their OneDrive URL. I found out when OneDrives appeared as `name_theirdomain_com`.
 - **Usage location before licence.** No usage location, no licence. The script sets it on its own, so a failed password step can't block licensing.
 - **New archives aren't instant.** `ArchiveStatus` says Active straight away, but the archive itself can take a while. `Get-EXOMailboxStatistics -Archive` returning nothing means it isn't ready yet.
 - **Archive copies often need EWS, and the EWS allow list changed in October 2026.** Main mail can copy fine while every archive fails with 'Unauthorized'. [Test-EwsArchiveReadiness](../03-EwsArchiveReadiness/) checks and fixes the causes in both tenants.
@@ -103,6 +104,7 @@ Open the CSV before you apply it. Two things to look for:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 2.0.1 | 2026-11-08 | Shared mailboxes get their sign-in name set to `TargetAddress`. Without it Exchange uses the tenant's default domain. Warns when a sign-in name differs, and the passwords file shows the real one |
 | 2.0.0 | 2026-11-07 | First public release. Generic parameters replace tenant-specific settings. Adds `-StagingSmtpDomain`, `-ResetPasswords`, `-TreatAsShared` and `-Exclude` |
 | 1.2.2 | 2026-11-07 | Password permission added. Usage location and licence no longer depend on the password step. Resumes people converted by an interrupted run. Warnings show Graph's real error text |
 | 1.2.1 | 2026-11-07 | Licences assigned through the Graph API, working round the `Set-MgUserLicense` empty-array bug |

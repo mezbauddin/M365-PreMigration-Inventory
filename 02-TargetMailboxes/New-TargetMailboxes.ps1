@@ -88,7 +88,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.0.0
+    Version : 2.0.1
     Date    : 2026-11-07
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -268,7 +268,11 @@ foreach ($r in $planRows) {
             }
             else { $state.Created = 'Exists' }
 
-            $u = Get-MgUser -UserId $userId -Property Id, AccountEnabled, UsageLocation
+            $u = Get-MgUser -UserId $userId -Property Id, AccountEnabled, UsageLocation, UserPrincipalName
+            if ($u.UserPrincipalName -ne $r.TargetAddress) {
+                $state.Note = "Sign-in is $($u.UserPrincipalName), not $($r.TargetAddress)"
+                Write-Warning "$($r.TargetAddress): $($state.Note)"
+            }
             if (-not $u.UsageLocation -and $PSCmdlet.ShouldProcess($r.TargetAddress, "Set usage location $UsageLocation")) {
                 Update-MgUser -UserId $userId -UsageLocation $UsageLocation
             }
@@ -277,7 +281,7 @@ foreach ($r in $planRows) {
                 try {
                     $pw = New-RandomPassword
                     Update-MgUser -UserId $userId -AccountEnabled:$true -PasswordProfile @{ Password = $pw; ForceChangePasswordNextSignIn = $true }
-                    $passwords += [pscustomobject]@{ DisplayName = $r.DisplayName; SignIn = $r.TargetAddress; TempPassword = $pw; SourceAddress = $r.SourceAddress }
+                    $passwords += [pscustomobject]@{ DisplayName = $r.DisplayName; SignIn = $u.UserPrincipalName; TempPassword = $pw; SourceAddress = $r.SourceAddress }
                     $state.Created += ', password set'
                 }
                 catch {
@@ -309,7 +313,10 @@ foreach ($r in $planRows) {
             # Shared mailbox, or anyone during -StageOnly.
             $mbx = $existing
             if (-not $mbx -and $PSCmdlet.ShouldProcess($r.TargetAddress, 'Create shared mailbox')) {
-                $mbx = New-Mailbox -Shared -Name $r.Alias -Alias $r.Alias -DisplayName $r.DisplayName -PrimarySmtpAddress $r.TargetAddress -ErrorAction Stop
+                # Set the sign-in name too. Left out, Exchange puts it on the tenant's DEFAULT domain (the
+                # destination's real domain), which can clash with existing users and sets the OneDrive URL.
+                $mbx = New-Mailbox -Shared -Name $r.Alias -Alias $r.Alias -DisplayName $r.DisplayName -PrimarySmtpAddress $r.TargetAddress `
+                    -MicrosoftOnlineServicesID $r.TargetAddress -ErrorAction Stop
                 if (-not $mbx) { throw "New-Mailbox returned nothing for $($r.TargetAddress). Is the alias or name already in use?" }
                 $state.Created = 'Created'
             }
@@ -398,7 +405,7 @@ if ($passwords) {
     Write-Warning "Temporary passwords saved to TargetBuild-Passwords-$stamp.csv. Move it somewhere secure and delete this copy."
 }
 $pending = @($status | Where-Object { ($_.Licence, $_.Archive, $_.AutoExpanding) -match 'PENDING' })
-$failed  = @($status | Where-Object { $_.Note -and $_.Note -notlike 'Password not set*' })
+$failed  = @($status | Where-Object { $_.Note -and $_.Note -notlike 'Password not set*' -and $_.Note -notlike 'Sign-in is *' })
 if ($failed)  { Write-Host "$($failed.Count) mailbox(es) hit an error. See the Note column in TargetBuild-Status-$stamp.csv." -ForegroundColor Red }
 if ($pending) { Write-Host "$($pending.Count) item(s) pending. Re-run -Apply once licences are free or in about 15 minutes." -ForegroundColor Yellow }
 elseif (-not $failed) { Write-Host 'All planned mailboxes are in place.' -ForegroundColor Green }
