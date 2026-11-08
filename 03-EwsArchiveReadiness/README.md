@@ -70,7 +70,7 @@ Each finding prints as OK, Fixed, Problem, Warning or Info, and the lot goes to 
 
 ## Lessons learnt
 
-- **Check both tenants, and check which one you're in.** The source has to let the tool read archives and the destination has to let it write them. I 'confirmed' the fix twice in the same tenant and spent hours on the wrong side. That's why `-TenantId` exists.
+- **Check both tenants, and check which one you're in.** The source has to let the tool read archives and the destination has to let it write them. It's easy to check the same tenant twice and think both are done. My source still had the old rule hours after I thought it was gone. That's why `-TenantId` exists.
 - **`EwsAllowedAppIDs` replaces the whole list.** Read it, add your ID, write it back. The script does this. A one-liner with a single ID wipes everything else that was allowed.
 - **Only one app on the list means only one app gets EWS.** If anything else in the tenant still uses EWS, such as a scanner, a CRM or an archiving add-on, add its app ID too. Check Admin centre > Reports > Usage > Exchange for EWS usage first.
 - **Clear the old rules by clearing the policy.** `Set-OrganizationConfig -EwsApplicationAccessPolicy $null` removes the policy and both lists. Clearing a list on its own fails ('EwsApplicationAccessPolicy must be specified'), and so does clearing both lists in one call.
