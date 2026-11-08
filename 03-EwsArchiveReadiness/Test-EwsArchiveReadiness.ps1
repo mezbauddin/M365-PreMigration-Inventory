@@ -1,204 +1,254 @@
 <#
 .SYNOPSIS
-    Checks, and optionally fixes, everything that stops a migration tool reading or writing In-Place Archives over EWS.
+    Checks, and optionally fixes, everything that stops a migration tool reading archives from the source tenant or
+    writing them to the destination tenant over EWS. Does both tenants in one run.
 
 .DESCRIPTION
-    TL;DR: Run it in the source AND the destination tenant with your migration tool's app ID. It checks four things:
-    the tenant EWS switch and app ID allow list, any old user-agent allow list left behind, mailboxes with EWS
-    switched off on their own, and whether the app has EWS permission. Add -CheckArchives to see which archives
-    are actually ready. Add -Fix to correct what it finds. Everything supports -WhatIf.
+    TL;DR: Give it your migration tool's app ID and both tenant IDs. It asks you to sign in to the source, checks
+    it, then asks you to sign in to the destination and checks that. For each tenant it looks at the EWS switch, the
+    app ID allow list, old user-agent rules left behind, mailboxes with EWS switched off on their own, the app's
+    full_access_as_app permission and, with -CheckArchives, whether each archive is actually ready. -Fix corrects
+    what it finds. Everything supports -WhatIf.
 
     Why it exists: many migration tools copy the main mailbox through Microsoft Graph but still use EWS for
-    In-Place Archives. Since October 2026 EWS is off by default and only apps on the tenant's EwsAllowedAppIDs
-    list get in. Get any one of these checks wrong and the main mailbox copies fine while every archive fails
+    In-Place Archives. Since October 2026 EWS is off by default and only apps on each tenant's EwsAllowedAppIDs
+    list get in. Get any layer wrong, in either tenant, and the main mailbox copies fine while every archive fails
     with 'Unauthorized'.
 
 .PARAMETER AppId
     The application (client) ID your migration tool uses for EWS.
 
-.PARAMETER TenantId
-    Optional tenant ID (GUID). Graph signs in to this tenant, and the script stops (and disconnects) if Exchange
-    is signed in to any other. Saves you fixing the wrong side of a migration.
+.PARAMETER SourceTenantId
+    Tenant ID (GUID) of the source. The tool has to READ archives here.
+
+.PARAMETER DestinationTenantId
+    Tenant ID (GUID) of the destination. The tool has to WRITE archives here.
+
+.PARAMETER SourceAdmin
+    Optional admin UPN for the source. Saves Windows from signing you in with a cached account from the other tenant.
+
+.PARAMETER DestinationAdmin
+    Optional admin UPN for the destination.
+
+.PARAMETER Only
+    Check just one side: Source or Destination. Both if omitted.
 
 .PARAMETER Fix
     Correct what the checks find: enable EWS for the tenant, add AppId to EwsAllowedAppIDs (keeping what's already
-    there), clear the old user-agent policy and allow list, and re-enable EWS on blocked mailboxes.
-
-.PARAMETER Mailbox
-    Limit the per-mailbox checks to these addresses. All mailboxes if omitted.
+    there), clear the old user-agent policy and its lists, and re-enable EWS on blocked mailboxes.
 
 .PARAMETER CheckArchives
-    Also check that every active archive can be read (Get-EXOMailboxStatistics -Archive). A brand-new archive
-    can show ArchiveStatus Active for a while before it's ready.
+    Also check that every active archive can be read. A brand-new archive can show ArchiveStatus Active for hours
+    before it's usable.
 
 .PARAMETER SkipConsentCheck
     Skip the Microsoft Graph check for the full_access_as_app permission.
 
 .EXAMPLE
-    .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000
+    .\Test-EwsArchiveReadiness.ps1 -AppId <app-id> -SourceTenantId <source-guid> -DestinationTenantId <dest-guid>
 
 .EXAMPLE
-    .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000 -Fix -WhatIf
+    .\Test-EwsArchiveReadiness.ps1 -AppId <app-id> -SourceTenantId <source-guid> -DestinationTenantId <dest-guid> -Fix -WhatIf
 
 .EXAMPLE
-    .\Test-EwsArchiveReadiness.ps1 -AppId 00000000-0000-0000-0000-000000000000 -TenantId 11111111-1111-1111-1111-111111111111 -Fix -CheckArchives
+    .\Test-EwsArchiveReadiness.ps1 -AppId <app-id> -SourceTenantId <source-guid> -DestinationTenantId <dest-guid> `
+        -SourceAdmin admin@fabrikam.onmicrosoft.com -DestinationAdmin admin@contoso.onmicrosoft.com -Fix -CheckArchives
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.4
+    Version : 2.0.0
     Date    : 2026-11-08
-    Changelog:
-      1.0.4  Clears legacy rules by setting the policy to null, which removes both lists. Verified on a live tenant.
-      1.0.3  An active legacy EnforceAllowList is reported as a Problem, not a Warning.
-      1.0.2  Clears the legacy allow and block lists in separate calls (Exchange rejects both at once) and only
-             reports Fixed when Exchange accepts the change. Reads list values whether they come back as a string or a collection.
-      1.0.1  -TenantId: Graph signs in to the named tenant, and an Exchange session for any other tenant is refused.
-      1.0.0  First release.
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
-    Requires: ExchangeOnlineManagement 3.x. For the consent check: Microsoft.Graph.Authentication and
-              Microsoft.Graph.Applications. Read-only without -Fix. -Fix needs Exchange Administrator; the consent
-              check needs Application.Read.All.
+    Requires: ExchangeOnlineManagement 3.x (3.7.2 or later recommended, for -DisableWAM). For the consent check:
+              Microsoft.Graph.Authentication and Microsoft.Graph.Applications. Read-only without -Fix. -Fix needs
+              Exchange Administrator in each tenant; the consent check needs Application.Read.All.
+    Changelog:
+      2.0.0  Checks source and destination in one run, with a sign-in for each and a guard against the wrong tenant.
+      1.0.4  Clears legacy rules by setting the policy to null, which removes both lists.
+      1.0.3  An active legacy EnforceAllowList is reported as a Problem.
+      1.0.2  Only reports Fixed when Exchange accepts the change. Reads list values as a string or a collection.
+      1.0.1  -TenantId guard.
+      1.0.0  First release.
     EWS in Exchange Online is retired for good on 1 April 2027. Plan archive copies before then.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$AppId,
-    [ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$SourceTenantId,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$DestinationTenantId,
+    [string]$SourceAdmin,
+    [string]$DestinationAdmin,
+    [ValidateSet('Source', 'Destination')][string]$Only,
     [switch]$Fix,
-    [string[]]$Mailbox,
     [switch]$CheckArchives,
     [switch]$SkipConsentCheck
 )
 
 $ErrorActionPreference = 'Stop'
+if ($SourceTenantId -eq $DestinationTenantId) { throw 'SourceTenantId and DestinationTenantId are the same tenant.' }
+$Cmdlet   = $PSCmdlet
 $findings = [System.Collections.Generic.List[object]]::new()
+$canDisableWam = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
+
 function Add-Finding($Area, $Target, $Status, $Detail) {
-    $findings.Add([pscustomobject]@{ Area = $Area; Target = $Target; Status = $Status; Detail = $Detail })
-    $colour = @{ OK = 'Green'; Fixed = 'Cyan'; Problem = 'Red'; Warning = 'Yellow'; Info = 'Gray' }[$Status]
-    Write-Host ("[{0}] {1}: {2} {3}" -f $Status, $Area, $Target, $Detail) -ForegroundColor $colour
+    $findings.Add([pscustomobject]@{ Side = $script:Side; Tenant = $script:TenantName; Area = $Area; Target = $Target; Status = $Status; Detail = $Detail })
+    $colour = @{ OK = 'Green'; Fixed = 'Cyan'; Problem = 'Red'; Warning = 'Yellow' }[$Status]
+    Write-Host ("  [{0}] {1}: {2} {3}" -f $Status, $Area, $Target, $Detail) -ForegroundColor $colour
 }
 
-if (-not (Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected')) {
-    Connect-ExchangeOnline -ShowBanner:$false
-}
-$conn = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
-if ($TenantId -and $conn.TenantID -ne $TenantId) {
-    $wrong = $conn.TenantID
-    Disconnect-ExchangeOnline -Confirm:$false
-    throw "Exchange signed in to tenant $wrong, not $TenantId. Run the script again and sign in with an admin of the right tenant."
-}
-$tenant = (Get-AcceptedDomain | Where-Object Default).DomainName
-Write-Host "Tenant: $tenant" -ForegroundColor Cyan
-
-# ------------------------------------------------------------------ 1. tenant switch and app ID allow list
-$org = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
-# Exchange can return the list as one comma-separated string or as a collection. Handle both.
+# Exchange can return a list as one comma-separated string or as a collection. Handle both.
 function Get-Values($v) { @(@($v) | ForEach-Object { "$_" -split '[,;\s]+' } | ForEach-Object { $_.Trim([char[]]'{} ') } | Where-Object { $_ }) }
-$allowed = Get-Values $org.EwsAllowedAppIDs
 
-if ($org.EwsEnabled -eq $true) { Add-Finding 'Tenant' 'EwsEnabled' 'OK' 'True' }
-elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Enable EWS')) {
-    Set-OrganizationConfig -EwsEnabled $true -ErrorAction Stop
-    Add-Finding 'Tenant' 'EwsEnabled' 'Fixed' 'Set to True'
+function Disconnect-All {
+    Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
 }
-else { Add-Finding 'Tenant' 'EwsEnabled' 'Problem' "Is '$($org.EwsEnabled)'. EWS is off for the whole tenant" }
 
-if ($allowed -contains $AppId) { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'OK' "$AppId is on the list" }
-elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, "Add $AppId to EwsAllowedAppIDs")) {
-    # The parameter replaces the whole list, so keep what's already there.
-    Set-OrganizationConfig -EwsAllowedAppIDs ((@($allowed) + $AppId | Select-Object -Unique) -join ',') -ErrorAction Stop
-    Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Fixed' "Added $AppId (kept $($allowed.Count) existing)"
+function Connect-Side($Side, $TenantId, $Admin) {
+    Disconnect-All
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        Write-Host ''
+        Write-Host "Sign in to the $($Side.ToUpper()) tenant ($TenantId) with an Exchange admin." -ForegroundColor Magenta
+        $p = @{ ShowBanner = $false }
+        if ($Admin) { $p.UserPrincipalName = $Admin }
+        # Second go: skip Windows' cached account so you get a fresh account picker.
+        if ($attempt -eq 2 -and $canDisableWam) { $p.DisableWAM = $true }
+        Connect-ExchangeOnline @p
+        $conn = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
+        if ($conn.TenantID -eq $TenantId) { return $true }
+        Write-Warning "That sign-in went to tenant $($conn.TenantID), not the $Side tenant."
+        Disconnect-ExchangeOnline -Confirm:$false | Out-Null
+        if ($attempt -eq 1) { Write-Host 'Trying again. Pick the right account this time (or pass -SourceAdmin / -DestinationAdmin).' -ForegroundColor Yellow }
+    }
+    return $false
 }
-else { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Problem' "$AppId isn't on the list. Current: $($allowed -join ', ')" }
 
-# ------------------------------------------------------------------ 2. old user-agent policy left behind
-$legacyPolicy = "$($org.EwsApplicationAccessPolicy)".Trim()
-$legacyAllow  = Get-Values $org.EwsAllowList
-$legacyBlock  = Get-Values $org.EwsBlockList
-if (-not ($legacyPolicy -or $legacyAllow -or $legacyBlock)) {
-    Add-Finding 'Tenant' 'Legacy policy' 'OK' 'No user-agent policy, allow list or block list'
-}
-elseif ($Fix -and $PSCmdlet.ShouldProcess($tenant, 'Clear the legacy EWS user-agent policy and lists')) {
+function Test-Side($Side, $TenantId, $Admin) {
+    $script:Side = $Side; $script:TenantName = $TenantId
+    Write-Host ''
+    Write-Host "==================== $($Side.ToUpper()) ====================" -ForegroundColor Cyan
+    if (-not (Connect-Side $Side $TenantId $Admin)) {
+        Add-Finding 'Sign-in' $TenantId 'Problem' "Couldn't sign in to the $Side tenant. Nothing was checked or changed here"
+        return
+    }
+    $script:TenantName = (Get-AcceptedDomain | Where-Object Default).DomainName
+    Write-Host "Connected to $($script:TenantName)" -ForegroundColor Cyan
+    $where = "$Side ($($script:TenantName))"
+
+    # ---------------------------------------------------------- 1. tenant switch and app ID allow list
+    $org = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
+    $allowed = Get-Values $org.EwsAllowedAppIDs
+
+    if ($org.EwsEnabled -eq $true) { Add-Finding 'Tenant' 'EwsEnabled' 'OK' 'True' }
+    elseif ($Fix -and $Cmdlet.ShouldProcess($where, 'Enable EWS')) {
+        Set-OrganizationConfig -EwsEnabled $true -ErrorAction Stop
+        Add-Finding 'Tenant' 'EwsEnabled' 'Fixed' 'Set to True'
+    }
+    else { Add-Finding 'Tenant' 'EwsEnabled' 'Problem' "Is '$($org.EwsEnabled)'. EWS is off for the whole tenant" }
+
+    if ($allowed -contains $AppId) { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'OK' "$AppId is on the list" }
+    elseif ($Fix -and $Cmdlet.ShouldProcess($where, "Add $AppId to EwsAllowedAppIDs")) {
+        # The parameter replaces the whole list, so keep what's already there.
+        Set-OrganizationConfig -EwsAllowedAppIDs ((@($allowed) + $AppId | Select-Object -Unique) -join ',') -ErrorAction Stop
+        Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Fixed' "Added $AppId (kept $($allowed.Count) existing)"
+    }
+    else { Add-Finding 'Tenant' 'EwsAllowedAppIDs' 'Problem' "$AppId isn't on the list. Current: '$($allowed -join ', ')'" }
+
+    # ---------------------------------------------------------- 2. old user-agent policy left behind
+    $legacyPolicy = "$($org.EwsApplicationAccessPolicy)".Trim()
+    $legacyAllow  = Get-Values $org.EwsAllowList
+    $legacyBlock  = Get-Values $org.EwsBlockList
     $was = "policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'"
-    try {
-        # Clearing the policy clears both lists with it. Exchange rejects a list change without a policy, and
-        # rejects both lists in one call, so this is the one command that works.
-        Set-OrganizationConfig -EwsApplicationAccessPolicy $null -ErrorAction Stop
-        $after = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
-        if ("$($after.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $after.EwsAllowList) -or (Get-Values $after.EwsBlockList)) {
-            throw "still set after the change: policy '$($after.EwsApplicationAccessPolicy)', allow '$((Get-Values $after.EwsAllowList) -join ';')', block '$((Get-Values $after.EwsBlockList) -join ';')'"
-        }
-        Add-Finding 'Tenant' 'Legacy policy' 'Fixed' "Cleared. Was $was"
+    if (-not ($legacyPolicy -or $legacyAllow -or $legacyBlock)) {
+        Add-Finding 'Tenant' 'Legacy policy' 'OK' 'No user-agent policy, allow list or block list'
     }
-    catch { Add-Finding 'Tenant' 'Legacy policy' 'Problem' "Couldn't clear ($was): $($_.Exception.Message)" }
-}
-else {
-    # EnforceAllowList only lets through clients whose user agent is on the list, so it blocks most apps outright.
-    $sev = if ($legacyPolicy -eq 'EnforceAllowList') { 'Problem' } else { 'Warning' }
-    Add-Finding 'Tenant' 'Legacy policy' $sev "Policy '$legacyPolicy', allow '$($legacyAllow -join ';')', block '$($legacyBlock -join ';')'. These match user agents, not app IDs, and can still block your tool"
-}
-
-# ------------------------------------------------------------------ 3. mailboxes with EWS off on their own
-$cas = if ($Mailbox) { $Mailbox | ForEach-Object { Get-CASMailbox -Identity $_ } } else { Get-CASMailbox -ResultSize Unlimited }
-$blocked = @($cas | Where-Object { $_.EwsEnabled -eq $false -or "$($_.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $_.EwsAllowList) -or (Get-Values $_.EwsBlockList) })
-if (-not $blocked) { Add-Finding 'Mailboxes' "$(@($cas).Count) checked" 'OK' 'None block EWS on their own' }
-foreach ($c in $blocked) {
-    $why = "EwsEnabled '$($c.EwsEnabled)', policy '$($c.EwsApplicationAccessPolicy)', allow '$($c.EwsAllowList -join ';')', block '$($c.EwsBlockList -join ';')'"
-    if ($Fix -and $PSCmdlet.ShouldProcess($c.PrimarySmtpAddress, 'Re-enable EWS and clear mailbox-level lists')) {
+    elseif ($Fix -and $Cmdlet.ShouldProcess($where, 'Clear the legacy EWS user-agent policy and lists')) {
         try {
-            Set-CASMailbox -Identity $c.Identity -EwsEnabled $true -ErrorAction Stop
-            # As at tenant level, clearing the policy clears the mailbox's allow and block lists with it.
-            if ("$($c.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $c.EwsAllowList) -or (Get-Values $c.EwsBlockList)) {
-                Set-CASMailbox -Identity $c.Identity -EwsApplicationAccessPolicy $null -ErrorAction Stop
+            # Clearing the policy clears both lists with it. Exchange rejects a list change without a policy, and
+            # rejects both lists in one call, so this is the one command that works.
+            Set-OrganizationConfig -EwsApplicationAccessPolicy $null -ErrorAction Stop
+            $after = Get-OrganizationConfig -RetrieveEwsOperationAccessPolicy
+            if ("$($after.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $after.EwsAllowList) -or (Get-Values $after.EwsBlockList)) {
+                throw 'still set after the change'
             }
-            Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Fixed' "Was $why"
+            Add-Finding 'Tenant' 'Legacy policy' 'Fixed' "Cleared. Was $was"
         }
-        catch { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' "Couldn't fix ($why): $($_.Exception.Message)" }
+        catch { Add-Finding 'Tenant' 'Legacy policy' 'Problem' "Couldn't clear ($was): $($_.Exception.Message)" }
     }
-    else { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' $why }
+    else {
+        # EnforceAllowList only lets through clients whose user agent is listed, so it blocks most apps outright.
+        $sev = if ($legacyPolicy -eq 'EnforceAllowList') { 'Problem' } else { 'Warning' }
+        Add-Finding 'Tenant' 'Legacy policy' $sev "$was. These match user agents, not app IDs, and can still block your tool"
+    }
+
+    # ---------------------------------------------------------- 3. mailboxes with EWS off on their own
+    $cas = Get-CASMailbox -ResultSize Unlimited
+    $blocked = @($cas | Where-Object { $_.EwsEnabled -eq $false -or "$($_.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $_.EwsAllowList) -or (Get-Values $_.EwsBlockList) })
+    if (-not $blocked) { Add-Finding 'Mailboxes' "$(@($cas).Count) checked" 'OK' 'None block EWS on their own' }
+    foreach ($c in $blocked) {
+        $why = "EwsEnabled '$($c.EwsEnabled)', policy '$($c.EwsApplicationAccessPolicy)', allow '$((Get-Values $c.EwsAllowList) -join ';')', block '$((Get-Values $c.EwsBlockList) -join ';')'"
+        if ($Fix -and $Cmdlet.ShouldProcess($c.PrimarySmtpAddress, 'Re-enable EWS and clear mailbox-level rules')) {
+            try {
+                Set-CASMailbox -Identity $c.Identity -EwsEnabled $true -ErrorAction Stop
+                if ("$($c.EwsApplicationAccessPolicy)".Trim() -or (Get-Values $c.EwsAllowList) -or (Get-Values $c.EwsBlockList)) {
+                    Set-CASMailbox -Identity $c.Identity -EwsApplicationAccessPolicy $null -ErrorAction Stop
+                }
+                Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Fixed' "Was $why"
+            }
+            catch { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' "Couldn't fix ($why): $($_.Exception.Message)" }
+        }
+        else { Add-Finding 'Mailbox' $c.PrimarySmtpAddress 'Problem' $why }
+    }
+
+    # ---------------------------------------------------------- 4. does the app have EWS permission here?
+    if (-not $SkipConsentCheck) {
+        try {
+            Connect-MgGraph -TenantId $TenantId -Scopes 'Application.Read.All' -NoWelcome
+            if ((Get-MgContext).TenantId -ne $TenantId) { throw "Graph signed in to $((Get-MgContext).TenantId)" }
+            $sp  = Get-MgServicePrincipal -Filter "appId eq '$AppId'"
+            $exo = Get-MgServicePrincipal -Filter "appId eq '00000002-0000-0ff1-ce00-000000000000'"   # Office 365 Exchange Online
+            if (-not $sp) { Add-Finding 'Consent' $AppId 'Problem' 'No service principal. The app was never consented in this tenant' }
+            else {
+                $roles = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id | Where-Object ResourceId -eq $exo.Id |
+                    ForEach-Object { $id = $_.AppRoleId; ($exo.AppRoles | Where-Object Id -eq $id).Value })
+                if ($roles -contains 'full_access_as_app') { Add-Finding 'Consent' $sp.DisplayName 'OK' 'Has full_access_as_app' }
+                else { Add-Finding 'Consent' $sp.DisplayName 'Problem' "No full_access_as_app (has: '$($roles -join ', ')'). Re-consent the app as a Global Admin" }
+            }
+        }
+        catch { Add-Finding 'Consent' $AppId 'Warning' "Couldn't check: $($_.Exception.Message)" }
+    }
+
+    # ---------------------------------------------------------- 5. are the archives actually ready?
+    if ($CheckArchives) {
+        $active = @(Get-EXOMailbox -ResultSize Unlimited -Properties ArchiveStatus | Where-Object ArchiveStatus -eq 'Active')
+        $notReady = @($active | Where-Object { -not (Get-EXOMailboxStatistics -Identity $_.ExternalDirectoryObjectId -Archive -ErrorAction SilentlyContinue) })
+        Add-Finding 'Archives' "$($active.Count) active" $(if ($notReady) { 'Warning' } else { 'OK' }) "$($active.Count - $notReady.Count) ready, $($notReady.Count) not ready yet"
+        foreach ($n in $notReady) {
+            Add-Finding 'Archive' $n.PrimarySmtpAddress 'Warning' 'Active but not readable yet. New archives can take hours. Re-check before copying'
+        }
+    }
 }
 
-# ------------------------------------------------------------------ 4. does the app have EWS permission?
-if (-not $SkipConsentCheck) {
-    try {
-        $ctx = Get-MgContext
-        if ($TenantId -and $ctx -and $ctx.TenantId -ne $TenantId) { Disconnect-MgGraph | Out-Null; $ctx = $null }
-        if (-not $ctx -or $ctx.Scopes -notcontains 'Application.Read.All') {
-            if ($TenantId) { Connect-MgGraph -TenantId $TenantId -Scopes 'Application.Read.All' -NoWelcome }
-            else { Connect-MgGraph -Scopes 'Application.Read.All' -NoWelcome }
-        }
-        $sp  = Get-MgServicePrincipal -Filter "appId eq '$AppId'"
-        $exo = Get-MgServicePrincipal -Filter "appId eq '00000002-0000-0ff1-ce00-000000000000'"   # Office 365 Exchange Online
-        if (-not $sp) { Add-Finding 'Consent' $AppId 'Problem' 'No service principal. The app was never consented in this tenant' }
-        else {
-            $roles = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id | Where-Object ResourceId -eq $exo.Id |
-                ForEach-Object { $id = $_.AppRoleId; ($exo.AppRoles | Where-Object Id -eq $id).Value }
-            if ($roles -contains 'full_access_as_app') { Add-Finding 'Consent' $sp.DisplayName 'OK' 'Has full_access_as_app' }
-            else { Add-Finding 'Consent' $sp.DisplayName 'Problem' "No full_access_as_app (has: $($roles -join ', ')). Re-consent the app as a Global Admin" }
-        }
-    }
-    catch { Add-Finding 'Consent' $AppId 'Warning' "Couldn't check: $($_.Exception.Message)" }
-}
+# ============================================================ run
+if ($Only -ne 'Destination') { Test-Side 'Source' $SourceTenantId $SourceAdmin }
+if ($Only -ne 'Source')      { Test-Side 'Destination' $DestinationTenantId $DestinationAdmin }
+Disconnect-All
 
-# ------------------------------------------------------------------ 5. are the archives actually ready?
-if ($CheckArchives) {
-    $mbx = if ($Mailbox) { $Mailbox | ForEach-Object { Get-EXOMailbox -Identity $_ -Properties ArchiveStatus } }
-           else { Get-EXOMailbox -ResultSize Unlimited -Properties ArchiveStatus }
-    $active = @($mbx | Where-Object ArchiveStatus -eq 'Active')
-    $notReady = @($active | Where-Object { -not (Get-EXOMailboxStatistics -Identity $_.ExternalDirectoryObjectId -Archive -ErrorAction SilentlyContinue) })
-    Add-Finding 'Archives' "$($active.Count) active" $(if ($notReady) { 'Warning' } else { 'OK' }) "$($active.Count - $notReady.Count) ready, $($notReady.Count) not ready yet"
-    foreach ($n in $notReady) {
-        Add-Finding 'Archive' $n.PrimarySmtpAddress 'Warning' 'Active but not readable yet. New archives can take hours. Re-check before copying'
-    }
-}
-
-# ------------------------------------------------------------------ report
-$file = ".\EwsArchiveReadiness-$($tenant)-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
+$file = ".\EwsArchiveReadiness-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
 $findings | Export-Csv $file -NoTypeInformation
-$problems = @($findings | Where-Object Status -eq 'Problem').Count
+
 Write-Host ''
+Write-Host '==================== SUMMARY ====================' -ForegroundColor Cyan
+$findings | Group-Object Side | Sort-Object { $_.Name -ne 'Source' } | ForEach-Object {
+    $s = $_.Group
+    $line = '{0,-12} {1,-28} problems {2}, fixed {3}, warnings {4}' -f $_.Name, $s[-1].Tenant,
+        @($s | Where-Object Status -eq 'Problem').Count, @($s | Where-Object Status -eq 'Fixed').Count, @($s | Where-Object Status -eq 'Warning').Count
+    Write-Host $line
+}
 Write-Host "Report: $file" -ForegroundColor Cyan
-if ($problems) { Write-Host "$problems problem(s) found. Re-run with -Fix (try -WhatIf first)." -ForegroundColor Red }
-elseif (@($findings | Where-Object Status -eq 'Fixed').Count) { Write-Host 'Fixes applied. Allow 15 to 30 minutes, then re-run without -Fix to confirm.' -ForegroundColor Cyan }
-else { Write-Host 'No blockers found. Run it in the other tenant too.' -ForegroundColor Green }
+$problems = @($findings | Where-Object Status -eq 'Problem').Count
+$fixed    = @($findings | Where-Object Status -eq 'Fixed').Count
+if ($problems) { Write-Host "$problems problem(s) left. Re-run with -Fix (try -WhatIf first). Archives won't copy until these are cleared." -ForegroundColor Red }
+elseif ($fixed) { Write-Host 'Fixes applied. Allow 15 to 30 minutes, restart your migration tool, then re-run without -Fix to confirm.' -ForegroundColor Cyan }
+else { Write-Host 'No blockers in either tenant. Archives can copy over EWS.' -ForegroundColor Green }
