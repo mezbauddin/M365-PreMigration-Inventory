@@ -51,7 +51,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -83,7 +83,7 @@ $ctx = Get-MgContext
 if ($ctx.TenantId -ne $TenantId) { throw "Graph signed in to $($ctx.TenantId), not $TenantId." }
 Write-Host "Signed in to $TenantId as $($ctx.Account)" -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Path $LocalPath -Force | Out-Null
+New-Item -ItemType Directory -Path $LocalPath -Force -WhatIf:$false | Out-Null
 $LocalPath = (Resolve-Path $LocalPath).Path
 $log = [System.Collections.Generic.List[object]]::new()
 function Write-Log($Who, $Path, $Status, $Detail) {
@@ -114,7 +114,7 @@ if ($Download) {
         catch { Write-Log $who $url 'Problem' "Can't open: $($_.Exception.Message). Archived OneDrive, or you're not an admin of it?"; continue }
 
         $root = Join-Path $LocalPath $who
-        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        New-Item -ItemType Directory -Path $root -Force -WhatIf:$false | Out-Null
         $files = 0; $bytes = 0
         $stack = [System.Collections.Generic.Stack[object]]::new()
         $stack.Push(@('root', ''))
@@ -125,7 +125,7 @@ if ($Download) {
                 $page = Invoke-MgGraphRequest GET $uri
                 foreach ($i in $page.value) {
                     $childRel = if ($rel) { "$rel\$($i.name)" } else { $i.name }
-                    if ($i.folder) { New-Item -ItemType Directory -Path (Join-Path $root $childRel) -Force | Out-Null; $stack.Push(@($i.id, $childRel)); continue }
+                    if ($i.folder) { New-Item -ItemType Directory -Path (Join-Path $root $childRel) -Force -WhatIf:$false | Out-Null; $stack.Push(@($i.id, $childRel)); continue }
                     if ($i.package) { Write-Log $who $childRel 'Skipped' 'OneNote notebook or package: export it separately'; continue }
                     $out = Join-Path $root $childRel
                     if ((Test-Path -LiteralPath $out) -and (Get-Item -LiteralPath $out).Length -eq [int64]$i.size) { $files++; $bytes += $i.size; continue }
@@ -217,7 +217,7 @@ if ($Upload) {
 }
 
 $file = Join-Path $LocalPath "DriveCopy-$(if ($Download) { 'Download' } else { 'Upload' })-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$log | Export-Csv $file -NoTypeInformation
+$log | Export-Csv $file -NoTypeInformation -WhatIf:$false
 $problems = @($log | Where-Object Status -eq 'Problem').Count
 Write-Host ''
 Write-Host "Report: $file" -ForegroundColor Cyan

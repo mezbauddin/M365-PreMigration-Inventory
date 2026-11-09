@@ -56,7 +56,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.0.1
+    Version : 2.0.2
     Date    : 2026-11-08
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -237,7 +237,7 @@ if ($Only -ne 'Source')      { Test-Side 'Destination' $DestinationTenantId $Des
 Disconnect-All
 
 $file = ".\EwsArchiveReadiness-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$findings | Export-Csv $file -NoTypeInformation
+$findings | Export-Csv $file -NoTypeInformation -WhatIf:$false
 
 Write-Host ''
 Write-Host '==================== SUMMARY ====================' -ForegroundColor Cyan

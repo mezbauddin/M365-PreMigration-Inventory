@@ -62,7 +62,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -110,7 +110,7 @@ function Get-Tag($src) { "T2T:$($src.ToLower())" }
 # ============================================================ EXPORT
 if ($Export) {
     if (-not $OutputFolder) { $OutputFolder = ".\MailConfig-$tenantName-$(Get-Date -Format 'yyyyMMdd-HHmm')" }
-    New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
+    New-Item -ItemType Directory -Path $OutputFolder -Force -WhatIf:$false | Out-Null
 
     $cache = @{}
     function Resolve-Smtp($id) {
@@ -157,8 +157,8 @@ if ($Export) {
         }
     }
     Write-Progress -Activity 'Permissions' -Completed
-    $perm | Export-Csv (Join-Path $OutputFolder 'Permissions.csv') -NoTypeInformation
-    $fwd  | Export-Csv (Join-Path $OutputFolder 'Forwarding.csv') -NoTypeInformation
+    $perm | Export-Csv (Join-Path $OutputFolder 'Permissions.csv') -NoTypeInformation -WhatIf:$false
+    $fwd  | Export-Csv (Join-Path $OutputFolder 'Forwarding.csv') -NoTypeInformation -WhatIf:$false
 
     $groups = @(Get-DistributionGroup -ResultSize Unlimited)
     $members = [System.Collections.Generic.List[object]]::new()
@@ -180,12 +180,12 @@ if ($Export) {
             AllSmtpAddresses                   = (@($g.EmailAddresses | Where-Object { $_ -like 'smtp:*' } | ForEach-Object { Get-SmtpOnly $_ } | Select-Object -Unique) -join ';')
         }
     }
-    $groupRows | Export-Csv (Join-Path $OutputFolder 'DistributionGroups.csv') -NoTypeInformation
-    $members   | Export-Csv (Join-Path $OutputFolder 'DistributionGroupMembers.csv') -NoTypeInformation
+    $groupRows | Export-Csv (Join-Path $OutputFolder 'DistributionGroups.csv') -NoTypeInformation -WhatIf:$false
+    $members   | Export-Csv (Join-Path $OutputFolder 'DistributionGroupMembers.csv') -NoTypeInformation -WhatIf:$false
 
     Get-DynamicDistributionGroup -ResultSize Unlimited | ForEach-Object {
         [pscustomobject]@{ DisplayName = $_.DisplayName; Alias = $_.Alias; PrimarySmtpAddress = "$($_.PrimarySmtpAddress)".ToLower(); RecipientFilter = $_.RecipientFilter }
-    } | Export-Csv (Join-Path $OutputFolder 'DynamicGroups.csv') -NoTypeInformation
+    } | Export-Csv (Join-Path $OutputFolder 'DynamicGroups.csv') -NoTypeInformation -WhatIf:$false
 
     Get-MailContact -ResultSize Unlimited | ForEach-Object {
         [pscustomobject]@{
@@ -196,11 +196,11 @@ if ($Export) {
             PrimarySmtpAddress            = "$($_.PrimarySmtpAddress)".ToLower()
             HiddenFromAddressListsEnabled = $_.HiddenFromAddressListsEnabled
         }
-    } | Export-Csv (Join-Path $OutputFolder 'MailContacts.csv') -NoTypeInformation
+    } | Export-Csv (Join-Path $OutputFolder 'MailContacts.csv') -NoTypeInformation -WhatIf:$false
 
     $rules = @(Get-TransportRule -ResultSize Unlimited)
     $rules | Select-Object Priority, Name, State, Mode, Description |
-        Export-Csv (Join-Path $OutputFolder 'TransportRules.csv') -NoTypeInformation
+        Export-Csv (Join-Path $OutputFolder 'TransportRules.csv') -NoTypeInformation -WhatIf:$false
     try {
         $collection = Export-TransportRuleCollection
         [IO.File]::WriteAllBytes((Join-Path (Resolve-Path $OutputFolder) 'TransportRules.xml'), $collection.FileData)
@@ -383,7 +383,7 @@ if ($Include -contains 'Forwarding') {
 
 # ---------------------------------------------------------- report
 $file = ".\MailConfig-Import-$tenantName-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$log | Export-Csv $file -NoTypeInformation
+$log | Export-Csv $file -NoTypeInformation -WhatIf:$false
 Write-Host ''
 $log | Group-Object Status | Sort-Object Name | ForEach-Object { Write-Host ("{0,-8} {1}" -f $_.Name, $_.Count) }
 Write-Host "Report: $file" -ForegroundColor Cyan

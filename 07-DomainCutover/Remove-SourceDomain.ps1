@@ -41,7 +41,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -94,7 +94,7 @@ $recipients | ForEach-Object {
         EmailAddresses       = (@($_.EmailAddresses) -join ';')
         ObjectId             = $_.ExternalDirectoryObjectId
     }
-} | Export-Csv $snapFile -NoTypeInformation
+} | Export-Csv $snapFile -NoTypeInformation -WhatIf:$false
 Write-Host "Snapshot of $($recipients.Count) recipients saved to $snapFile. Keep it: the destination needs it for X500 addresses." -ForegroundColor Green
 if ($SnapshotOnly) { return }
 
@@ -205,7 +205,7 @@ if ($RemoveDomain) {
 }
 
 $file = ".\RemoveSourceDomain-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$log | Export-Csv $file -NoTypeInformation
+$log | Export-Csv $file -NoTypeInformation -WhatIf:$false
 Write-Host ''
 $log | Group-Object Status | ForEach-Object { Write-Host ("{0,-8} {1}" -f $_.Name, $_.Count) }
 Write-Host "Report: $file   Snapshot: $snapFile" -ForegroundColor Cyan

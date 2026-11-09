@@ -72,7 +72,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -125,7 +125,7 @@ function Get-LinkAddress($l) {
 # ============================================================ EXPORT
 if ($Export) {
     if (-not $OutputFolder) { $OutputFolder = ".\Collaboration-$tenantName-$(Get-Date -Format 'yyyyMMdd-HHmm')" }
-    New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
+    New-Item -ItemType Directory -Path $OutputFolder -Force -WhatIf:$false | Out-Null
 
     # ---------------------------------------------------- SharePoint, optional
     $sites = @()
@@ -186,8 +186,8 @@ if ($Export) {
         }
     }
     Write-Progress -Activity 'Groups' -Completed
-    $groupRows | Export-Csv (Join-Path $OutputFolder 'Groups.csv') -NoTypeInformation
-    $links     | Export-Csv (Join-Path $OutputFolder 'GroupLinks.csv') -NoTypeInformation
+    $groupRows | Export-Csv (Join-Path $OutputFolder 'Groups.csv') -NoTypeInformation -WhatIf:$false
+    $links     | Export-Csv (Join-Path $OutputFolder 'GroupLinks.csv') -NoTypeInformation -WhatIf:$false
 
     # ---------------------------------------------------- sites that aren't group sites or OneDrives
     $siteRows = @()
@@ -210,7 +210,7 @@ if ($Export) {
                 LastContentModifiedDate = $s.LastContentModifiedDate
             }
         }
-        $siteRows | Sort-Object Kind, Url | Export-Csv (Join-Path $OutputFolder 'Sites.csv') -NoTypeInformation
+        $siteRows | Sort-Object Kind, Url | Export-Csv (Join-Path $OutputFolder 'Sites.csv') -NoTypeInformation -WhatIf:$false
     }
 
     $teams = @($groupRows | Where-Object TeamsEnabled).Count

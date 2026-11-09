@@ -33,7 +33,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-08
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -141,7 +141,7 @@ $report = foreach ($p in $people) {
     }
 }
 $file = ".\TargetOneDrives-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$report | Export-Csv $file -NoTypeInformation
+$report | Export-Csv $file -NoTypeInformation -WhatIf:$false
 $report | Format-Table -AutoSize | Out-Host
 Write-Host "Report: $file" -ForegroundColor Cyan
 $left = @($report | Where-Object Status -eq 'Pending').Count

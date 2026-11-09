@@ -88,7 +88,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.0.1
+    Version : 2.0.2
     Date    : 2026-11-07
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -212,7 +212,7 @@ if ($Plan) {
         }
     }
 
-    $rows | Sort-Object Kind, Licence, DisplayName | Export-Csv $PlanFile -NoTypeInformation
+    $rows | Sort-Object Kind, Licence, DisplayName | Export-Csv $PlanFile -NoTypeInformation -WhatIf:$false
     $inc = @($rows | Where-Object Include)
     Write-Host ''
     $inc | Group-Object Kind, Licence | Select-Object @{ n = 'Kind, Licence'; e = { $_.Name } }, Count | Format-Table -AutoSize | Out-Host
@@ -398,10 +398,10 @@ foreach ($r in $planRows) {
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
-$status | Export-Csv ".\TargetBuild-Status-$stamp.csv" -NoTypeInformation
+$status | Export-Csv ".\TargetBuild-Status-$stamp.csv" -NoTypeInformation -WhatIf:$false
 $status | Format-Table TargetAddress, Kind, Created, Licence, Archive, AutoExpanding -AutoSize | Out-Host
 if ($passwords) {
-    $passwords | Export-Csv ".\TargetBuild-Passwords-$stamp.csv" -NoTypeInformation
+    $passwords | Export-Csv ".\TargetBuild-Passwords-$stamp.csv" -NoTypeInformation -WhatIf:$false
     Write-Warning "Temporary passwords saved to TargetBuild-Passwords-$stamp.csv. Move it somewhere secure and delete this copy."
 }
 $pending = @($status | Where-Object { ($_.Licence, $_.Archive, $_.AutoExpanding) -match 'PENDING' })

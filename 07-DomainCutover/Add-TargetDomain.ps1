@@ -34,7 +34,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -141,5 +141,5 @@ foreach ($d in $Domain) {
 Write-Host ''
 $records | Format-Table Domain, Stage, Type, Name, Value -AutoSize -Wrap | Out-Host
 $file = ".\TargetDomainDns-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$records | Export-Csv $file -NoTypeInformation
+$records | Export-Csv $file -NoTypeInformation -WhatIf:$false
 Write-Host "Records saved to $file. Compare with your Export-DomainDns file and change only what's listed." -ForegroundColor Cyan

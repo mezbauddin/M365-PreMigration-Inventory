@@ -48,7 +48,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -225,9 +225,9 @@ foreach ($w in $work) {
 
 # ------------------------------------------------------------ report
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
-$log | Export-Csv ".\SwitchTargetAddresses-$stamp.csv" -NoTypeInformation
+$log | Export-Csv ".\SwitchTargetAddresses-$stamp.csv" -NoTypeInformation -WhatIf:$false
 if ($passwords.Count) {
-    $passwords | Export-Csv ".\CutoverPasswords-$stamp.csv" -NoTypeInformation
+    $passwords | Export-Csv ".\CutoverPasswords-$stamp.csv" -NoTypeInformation -WhatIf:$false
     Write-Warning "Temporary passwords saved to CutoverPasswords-$stamp.csv. Send them one by one, then delete the file."
 }
 Write-Host ''
