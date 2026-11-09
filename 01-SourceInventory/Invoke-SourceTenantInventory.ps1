@@ -11,13 +11,13 @@
     Output folder: .\Inventory-<tenant>-<yyyyMMdd-HHmm>\
 
 .PARAMETER SharePointAdminUrl
-    The SharePoint admin URL, with or without https://, for example homesuretytitle-admin.sharepoint.com
+    The SharePoint admin URL, with or without https://, for example contoso-admin.sharepoint.com
 
 .PARAMETER SkipMailboxPermissions
     Skip the Full Access and Send As scan (the slowest part on large tenants).
 
 .EXAMPLE
-    .\Invoke-SourceTenantInventory.ps1 -SharePointAdminUrl https://homesuretytitle-admin.sharepoint.com
+    .\Invoke-SourceTenantInventory.ps1 -SharePointAdminUrl https://contoso-admin.sharepoint.com
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)

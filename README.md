@@ -15,8 +15,9 @@
 | 2 | [New-TargetMailboxes](02-TargetMailboxes/) | Builds the destination mailboxes from the inventory. Stage as shared, copy, then license and convert at cutover | Yes, destination only. Supports `-WhatIf` |
 | 3 | [Test-EwsArchiveReadiness](03-EwsArchiveReadiness/) | Signs in to source and destination in turn and finds what stops archives copying over EWS: tenant switch, app ID allow list, old user-agent rules, per-mailbox blocks, consent, archive readiness. Without it, main mail copies and every archive fails | Only with `-Fix`. Supports `-WhatIf` |
 | 4 | [Request-TargetOneDrives](04-TargetOneDrives/) | Creates the destination OneDrives for everyone in the plan, in batches of 200, and reports each URL. Without it, the OneDrive copy fails for anyone who hasn't signed in yet | Yes, creates OneDrives. Supports `-WhatIf` |
+| 5 | [Copy-MailConfig](05-MailConfig/) | Exports mailbox permissions, forwarding, distribution lists and contacts from the source and rebuilds them in the destination. Transport rules exported for review. Without it, shared mailboxes arrive that nobody can open | Export: no. Import: yes, destination only. Supports `-WhatIf` |
 
-More to come as the migration I'm running moves on: the source export (permissions, lists, rules) and the cutover steps.
+More to come as the migration I'm running moves on: the domain cutover, validation, device rejoin, source decommissioning and a handover pack.
 
 EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy archives over EWS stop working then.
 
@@ -26,7 +27,8 @@ EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy a
 2. Run **New-TargetMailboxes -Plan** in the same folder. It finds the inventory and writes `TargetBuildPlan.csv`. Review it.
 3. Run **New-TargetMailboxes -Apply -StageOnly** against the destination, then start your mail copy.
 4. Once people are licensed, run **Request-TargetOneDrives** so their OneDrives are ready. Copy them after cutover.
-5. Before copying archives, run **Test-EwsArchiveReadiness** with your migration tool's app ID and both tenant IDs. It checks and fixes both tenants in one run.
+5. Run **Copy-MailConfig -Export** against the source, then **-Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
+6. Before copying archives, run **Test-EwsArchiveReadiness** with your migration tool's app ID and both tenant IDs. It checks and fixes both tenants in one run.
 
 ## A word on the output
 
