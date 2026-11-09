@@ -1,0 +1,42 @@
+# Docs
+
+**TL;DR:** The paperwork that goes around the scripts. A questionnaire to scope the job, a day-by-day cutover runbook, plain-English emails for staff, a risk register and a handover template. All Markdown, all meant to be copied and filled in for your own project.
+
+| | |
+| --- | --- |
+| Author | Mezba Uddin, Microsoft MVP |
+| Version | 1.0.0 |
+| Released | 9 November 2026 |
+| Licence | MIT |
+
+Part of my [M365 tenant-to-tenant migration toolkit](../README.md).
+
+## Why these exist
+
+The scripts move things. What sinks most migrations I've seen isn't a failed script, though. It's a question nobody asked at the start, a date nobody agreed, or staff who didn't know they'd need to sign in again on Monday. These are the documents I use to stop that happening.
+
+## The documents
+
+| Document | When | What it's for |
+| --- | --- | --- |
+| [Discovery questionnaire](Discovery-Questionnaire.md) | Before you quote | Questions about tenants, domains, DNS, licences, sync, devices, security, retention, mail flow, Teams and SharePoint, sizes, deadlines and who owns comms |
+| [Risk register](Risk-Register.md) | From discovery to go/no-go | Common risks with likelihood, impact, mitigation and the toolkit part that helps |
+| [Cutover runbook](Cutover-Runbook.md) | T-14 to T+7 | Day-by-day steps that call the toolkit scripts, go/no-go checks, the rollback point and who does what |
+| [Comms templates](Comms-Templates.md) | T-7 to T+1 | Emails for staff and a short update for the business owner |
+| [Handover template](Handover-Template.md) | T+7 | What moved, where things are, admin accounts, DNS before and after, licences, open items, support window and decommission date |
+
+## How to use them
+
+1. Copy the `docs` folder into your project notes. Don't edit them here.
+2. Start with the questionnaire. Its answers feed the risk register and the runbook dates.
+3. Review the risk register with the business owner before every go/no-go.
+4. Hand the comms templates to whoever owns staff communication, with dates filled in.
+5. Fill in the handover as you go, not on the last day.
+
+Keep filled-in copies out of public repos. They'll hold names, dates and DNS details.
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.0.0 | 2026-11-09 | First release |
