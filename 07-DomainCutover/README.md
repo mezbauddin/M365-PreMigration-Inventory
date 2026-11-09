@@ -103,3 +103,14 @@ Disconnect-ExchangeOnline -Confirm:$false; Disconnect-MgGraph
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0.0 | 2026-11-09 | First release: Export-DomainDns, Remove-SourceDomain, Add-TargetDomain, Switch-TargetAddresses |
+
+## Deleted users blocking the domain: `Clear-DeletedUserDomain.ps1`
+
+If `Remove-SourceDomain -WhatIf` lists **Blocker: Deleted user**, those are leavers in the recycle bin still holding a sign-in on the domain. Microsoft won't release the domain, and won't rename a deleted user. This restores each one as `<name>-old@<tenant>.onmicrosoft.com`, blocks it and deletes it again, so nothing is purged and everything stays recoverable for 30 more days.
+
+```powershell
+.\Clear-DeletedUserDomain.ps1 -TenantId <source-guid> -Domain fabrikam.com -WhatIf
+.\Clear-DeletedUserDomain.ps1 -TenantId <source-guid> -Domain fabrikam.com
+```
+
+Run it the day before cutover, not on the night: it's one more thing that can surprise you.
