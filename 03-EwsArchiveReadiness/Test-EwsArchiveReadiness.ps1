@@ -11,7 +11,7 @@
     what it finds. Everything supports -WhatIf.
 
     Why it exists: many migration tools copy the main mailbox through Microsoft Graph but still use EWS for
-    In-Place Archives. Since October 2026 EWS is off by default and only apps on each tenant's EwsAllowedAppIDs
+    In-Place Archives. Since October 2026, once EWS is on, only apps on each tenant's EwsAllowedAppIDs
     list get in. Get any layer wrong, in either tenant, and the main mailbox copies fine while every archive fails
     with 'Unauthorized'.
 
@@ -56,7 +56,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.0.0
+    Version : 2.0.1
     Date    : 2026-11-08
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -64,6 +64,7 @@
               Microsoft.Graph.Authentication and Microsoft.Graph.Applications. Read-only without -Fix. -Fix needs
               Exchange Administrator in each tenant; the consent check needs Application.Read.All.
     Changelog:
+      2.0.1  Missing full_access_as_app is a Warning (delegated tools don't need it). Paged role lookup. Timing and wording per Microsoft's guidance.
       2.0.0  Checks source and destination in one run, with a sign-in for each and a guard against the wrong tenant.
       1.0.4  Clears legacy rules by setting the policy to null, which removes both lists.
       1.0.3  An active legacy EnforceAllowList is reported as a Problem.
@@ -210,10 +211,10 @@ function Test-Side($Side, $TenantId, $Admin) {
             $exo = Get-MgServicePrincipal -Filter "appId eq '00000002-0000-0ff1-ce00-000000000000'"   # Office 365 Exchange Online
             if (-not $sp) { Add-Finding 'Consent' $AppId 'Problem' 'No service principal. The app was never consented in this tenant' }
             else {
-                $roles = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id | Where-Object ResourceId -eq $exo.Id |
+                $roles = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All | Where-Object ResourceId -eq $exo.Id |
                     ForEach-Object { $id = $_.AppRoleId; ($exo.AppRoles | Where-Object Id -eq $id).Value })
                 if ($roles -contains 'full_access_as_app') { Add-Finding 'Consent' $sp.DisplayName 'OK' 'Has full_access_as_app' }
-                else { Add-Finding 'Consent' $sp.DisplayName 'Problem' "No full_access_as_app (has: '$($roles -join ', ')'). Re-consent the app as a Global Admin" }
+                else { Add-Finding 'Consent' $sp.DisplayName 'Warning' "No full_access_as_app (has: '$($roles -join ', ')'). Needed if your tool uses app-only EWS; tools that use delegated EWS don't need it. Re-consent as a Global Admin if yours is app-only" }
             }
         }
         catch { Add-Finding 'Consent' $AppId 'Warning' "Couldn't check: $($_.Exception.Message)" }
@@ -250,5 +251,5 @@ Write-Host "Report: $file" -ForegroundColor Cyan
 $problems = @($findings | Where-Object Status -eq 'Problem').Count
 $fixed    = @($findings | Where-Object Status -eq 'Fixed').Count
 if ($problems) { Write-Host "$problems problem(s) left. Re-run with -Fix (try -WhatIf first). Archives won't copy until these are cleared." -ForegroundColor Red }
-elseif ($fixed) { Write-Host 'Fixes applied. Allow 15 to 30 minutes, restart your migration tool, then re-run without -Fix to confirm.' -ForegroundColor Cyan }
+elseif ($fixed) { Write-Host 'Fixes applied. Allow time (Microsoft says up to 24 hours), restart your migration tool, then re-run without -Fix to confirm.' -ForegroundColor Cyan }
 else { Write-Host 'No blockers in either tenant. Archives can copy over EWS.' -ForegroundColor Green }

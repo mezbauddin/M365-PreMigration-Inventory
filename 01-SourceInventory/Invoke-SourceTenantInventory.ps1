@@ -21,7 +21,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.3
+    Version : 1.0.4
     Date    : 2026-11-04
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement,
               Microsoft.Online.SharePoint.PowerShell (Windows PowerShell 5.1 for the SPO module)
@@ -182,7 +182,7 @@ $mbxRows = foreach ($m in $mailboxes) {
         ForwardingSmtpAddress = $m.ForwardingSmtpAddress
         ForwardingAddress     = $m.ForwardingAddress
         LastLogonTime         = if ($stats) { $stats.LastLogonTime } else { $null }
-        Aliases               = (($m.EmailAddresses | Where-Object { $_ -like 'smtp:*' }) -join ';')
+        Aliases               = (($m.EmailAddresses | Where-Object { $_ -clike 'smtp:*' }) -join ';')
     }
 }
 $mbxRows | Sort-Object SizeGB -Descending |

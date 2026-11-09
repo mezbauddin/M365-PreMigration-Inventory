@@ -177,7 +177,7 @@ if ($Export) {
             HiddenFromAddressListsEnabled      = $g.HiddenFromAddressListsEnabled
             MemberJoinRestriction              = $g.MemberJoinRestriction
             MemberDepartRestriction            = $g.MemberDepartRestriction
-            AllSmtpAddresses                   = (@($g.EmailAddresses | Where-Object { $_ -like 'smtp:*' } | ForEach-Object { Get-SmtpOnly $_ }) -join ';')
+            AllSmtpAddresses                   = (@($g.EmailAddresses | Where-Object { $_ -like 'smtp:*' } | ForEach-Object { Get-SmtpOnly $_ } | Select-Object -Unique) -join ';')
         }
     }
     $groupRows | Export-Csv (Join-Path $OutputFolder 'DistributionGroups.csv') -NoTypeInformation

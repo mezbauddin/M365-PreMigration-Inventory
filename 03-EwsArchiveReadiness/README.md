@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 2.0.0 |
+| Version | 2.0.1 |
 | Released | 8 November 2026 |
 | Licence | MIT |
 
@@ -15,7 +15,7 @@ Part 3 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it bef
 
 Most migration tools now copy the main mailbox through Microsoft Graph. Many of them still read and write In-Place Archives over EWS (Exchange Web Services).
 
-EWS changed in October 2026. It's now off by default in Exchange Online, and only apps whose ID is on the tenant's `EwsAllowedAppIDs` list are let in. It's switched off for good on **1 April 2027**.
+EWS changed in October 2026. Once a tenant has EWS on, only apps whose ID is on its `EwsAllowedAppIDs` list are let in. Microsoft pre-filled that list in many tenants from recent EWS activity, so expect to find IDs already there, and don't wipe them. Tenants that never set EWS are being switched off in phases. It's switched off for good on **1 April 2027**.
 
 A tenant-to-tenant archive copy goes through EWS **twice**: once to read from the source, once to write to the destination. Both tenants have to let the app in, at every layer.
 
@@ -81,7 +81,7 @@ $p = @{
 
 You're asked to sign in twice: source first, then destination. If a sign-in lands in the wrong tenant, the script says so, disconnects and asks again before it touches anything.
 
-After fixing, give Exchange 15 to 30 minutes, restart your migration tool so it gets fresh tokens, and run step 1 again to confirm.
+After fixing, restart your migration tool so it gets fresh tokens, and run step 1 again to confirm. Microsoft says allow-list changes can take up to 24 hours. Mine worked within about half an hour, but plan for the longer figure.
 
 ## Output
 
@@ -103,6 +103,7 @@ Each finding prints under its tenant as OK, Fixed, Problem or Warning. A summary
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 2.0.1 | 2026-11-09 | Missing `full_access_as_app` is a Warning, since tools using delegated EWS don't need it. Timing and wording match Microsoft's guidance (allow-list changes can take up to 24 hours) |
 | 2.0.0 | 2026-11-08 | Checks source and destination in one run. Separate sign-in for each, with a wrong-tenant guard and a retry through a fresh account picker. `-SourceAdmin`, `-DestinationAdmin` and `-Only`. Summary per tenant |
 | 1.0.4 | 2026-11-08 | Clears legacy rules by setting `EwsApplicationAccessPolicy` to `$null`, which removes both lists in one go |
 | 1.0.3 | 2026-11-08 | An active legacy `EnforceAllowList` counts as a Problem |

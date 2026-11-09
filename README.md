@@ -25,10 +25,14 @@ EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy a
 
 1. Run **Invoke-SourceTenantInventory** against the source. It writes `Inventory-<tenant>-<date>\04-Mailboxes.csv` and friends.
 2. Run **New-TargetMailboxes -Plan** in the same folder. It finds the inventory and writes `TargetBuildPlan.csv`. Review it.
-3. Run **New-TargetMailboxes -Apply -StageOnly** against the destination, then start your mail copy.
-4. Once people are licensed, run **Request-TargetOneDrives** so their OneDrives are ready. Copy them after cutover.
-5. Run **Copy-MailConfig -Export** against the source, then **-Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
-6. Before copying archives, run **Test-EwsArchiveReadiness** with your migration tool's app ID and both tenant IDs. It checks and fixes both tenants in one run.
+3. Run **New-TargetMailboxes -Apply -StageOnly** against the destination.
+4. If your tool copies In-Place Archives, run **Test-EwsArchiveReadiness** with its app ID and both tenant IDs **before** you start the mail copy. Then start the copy.
+5. Once people are licensed, run **Request-TargetOneDrives** so their OneDrives are ready. Copy them after cutover.
+6. Run **Copy-MailConfig -Export** against the source, then **-Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
+
+## Two tenants, one PC
+
+You'll be signed in to two tenants from the same machine for weeks. Windows quietly reuses your last sign-in, so `Connect-ExchangeOnline` or `Connect-MgGraph` can land you in the wrong tenant without asking. Scripts in this toolkit that change things check the tenant ID before they do. When you run commands by hand, name the account (`-UserPrincipalName`) or the tenant (`-TenantId`), and check `Get-ConnectionInformation` before anything destructive.
 
 ## A word on the output
 

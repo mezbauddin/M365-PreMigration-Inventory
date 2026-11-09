@@ -13,7 +13,7 @@ Part 2 of my [M365 tenant-to-tenant migration toolkit](../README.md). Part 1 is 
 
 ## Why
 
-Migration tools copy content. They don't decide what the destination should look like. Before ShareGate (or anything else) can copy a mailbox, something has to exist on the other side, with the right type, the right licence and an archive if the source has one.
+Migration tools copy content. They don't decide what the destination should look like. Before any migration tool can copy a mailbox, something has to exist on the other side, with the right type, the right licence and an archive if the source has one.
 
 Waiting for licences, or for the cutover date, holds up the copy. A shared mailbox needs no licence. So build everything as shared first, start the copy, and convert the people later. Mail lands early, and nobody can sign in to the new tenant before you're ready.
 
@@ -92,7 +92,7 @@ Open the CSV before you apply it. Two things to look for:
 - **Usage location before licence.** No usage location, no licence. The script sets it on its own, so a failed password step can't block licensing.
 - **New archives aren't instant.** `ArchiveStatus` says Active straight away, but the archive itself can take a while. `Get-EXOMailboxStatistics -Archive` returning nothing means it isn't ready yet.
 - **Archive copies often need EWS, and the EWS allow list changed in October 2026.** Main mail can copy fine while every archive fails with 'Unauthorized'. [Test-EwsArchiveReadiness](../03-EwsArchiveReadiness/) checks and fixes the causes in both tenants.
-- **Shared mailbox destinations get email only in ShareGate.** Calendars and contacts copy once the mailbox is a user mailbox. Run an incremental after step 4.
+- **Some tools copy only email into a shared mailbox.** The one I used skipped calendars and contacts until the mailbox was a user mailbox. Check yours, and run an incremental after step 4 if needed.
 
 ## Notes
 

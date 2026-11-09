@@ -1,4 +1,4 @@
-# M365 Pre-Migration Inventory
+# Invoke-SourceTenantInventory
 
 **TL;DR:** `Invoke-SourceTenantInventory.ps1` is a read-only PowerShell script that inventories a Microsoft 365 source tenant before a tenant-to-tenant migration. One run gives you mailbox and archive sizes, mailbox permissions, users and licences, groups, distribution lists, mail contacts, domains, SharePoint sites and OneDrive storage as CSV files, plus a one-page summary. It changes nothing in the tenant.
 
@@ -13,7 +13,7 @@ Part 1 of my [M365 tenant-to-tenant migration toolkit](../README.md). Next: [New
 
 ## Why
 
-Migration tools such as ShareGate scan SharePoint and Teams well, but the numbers you need to plan mail and identity (mailbox sizes, archives, holds, Full Access and Send As, distribution list members, mail contacts) sit in Exchange and Entra. This script collects those in one pass so you can size the job before you copy anything.
+Migration tools scan SharePoint and Teams well, but the numbers you need to plan mail and identity (mailbox sizes, archives, holds, Full Access and Send As, distribution list members, mail contacts) sit in Exchange and Entra. This script collects those in one pass so you can size the job before you copy anything.
 
 ## Requirements
 
@@ -63,7 +63,7 @@ Files land in `.\Inventory-<tenant>-<yyyyMMdd-HHmm>\`.
 
 - Sizes are decimal GB (1 GB = 1,000,000,000 bytes) for Exchange. SharePoint storage comes from `StorageUsageCurrent` in MB and is divided by 1,024.
 - The script only reads. It doesn't change any setting, permission or object.
-- Not yet tested against a live tenant in this release. Run it against a test tenant first if you can, and open an issue with anything that breaks.
+- Run against a live source tenant of about 40 mailboxes as part of a real migration. Run it against a test tenant first if you can, and open an issue with anything that breaks.
 
 ## Changelog
 
