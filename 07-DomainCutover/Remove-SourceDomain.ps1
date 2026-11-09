@@ -41,7 +41,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -82,7 +82,8 @@ function Write-Log($Area, $Object, $Status, $Detail) {
 }
 
 # ------------------------------------------------------------ 1. snapshot
-$recipients = @(Get-EXORecipient -ResultSize Unlimited -Properties LegacyExchangeDN, EmailAddresses, ExternalDirectoryObjectId)
+# Get-EXORecipient cannot return LegacyExchangeDN; the classic cmdlet can
+$recipients = @(Get-Recipient -ResultSize Unlimited)
 $snapFile = ".\SourceRecipients-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
 $recipients | ForEach-Object {
     [pscustomobject]@{
