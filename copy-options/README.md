@@ -40,7 +40,9 @@ These parts of the toolkit don't care how the data moves:
 - [02 Target mailboxes](../02-TargetMailboxes/). For the native route, read the identity mapping note in A first, because native migration needs mail users, not mailboxes
 - [04 Target OneDrives](../04-TargetOneDrives/)
 - [05 Mail config](../05-MailConfig/)
+- [06 Groups, Teams and sites](../06-GroupsTeamsSites/)
 - [07 Domain cutover](../07-DomainCutover/)
+- [09 Validation](../09-Validation/)
 
 [03 EWS archive readiness](../03-EwsArchiveReadiness/) only applies if your tool copies archives over EWS. ShareGate does. Microsoft's native mailbox migration doesn't.
 
