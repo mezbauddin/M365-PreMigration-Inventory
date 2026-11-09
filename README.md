@@ -17,7 +17,7 @@ flowchart LR
     C --> A[Microsoft native]
     C --> S[ShareGate]
     C --> N[No budget]
-    A & S & N --> M[Rebuild config<br/>05]
+    A & S & N --> M[Rebuild config<br/>05 · 06]
     M --> X[Cut over domain<br/>07]
     X --> V[Validate<br/>09]
     V --> R[Decommission source<br/>10]
@@ -31,15 +31,18 @@ flowchart LR
 | Copy | [Copy options](copy-options/) | [A. Microsoft native](copy-options/A-Microsoft-native/), [B. ShareGate](copy-options/B-ShareGate/), [C. No budget](copy-options/C-No-budget/), with a comparison to help you choose | Depends on option |
 | Copy | [03 EWS archive readiness](03-EwsArchiveReadiness/) | If your tool copies archives over EWS: checks and fixes both tenants. Without it, mail copies and every archive fails | Only with `-Fix` |
 | Rebuild | [05 Mail config](05-MailConfig/) | Permissions, forwarding, distribution lists and contacts, exported and rebuilt. Without it, shared mailboxes arrive that nobody can open | Destination on import. `-WhatIf` |
+| Rebuild | [06 Groups, Teams and sites](06-GroupsTeamsSites/) | Every Microsoft 365 group, Team and SharePoint site exported. Groups created in the destination on your domain, with owners and members, before the copy | Destination on import. `-WhatIf` |
 | Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, release from source, add and verify in destination, old addresses with X500s, sign-in names, temporary passwords | Both tenants, in order. `-WhatIf` |
+| Validate | [09 Validation](09-Validation/) | Checks the destination against the inventory, plan and mapping: types, licences, archives, item counts, addresses, X500s, OneDrives, list members. Pass, warn and fail report | No |
+| Plan and run | [docs](docs/) | [Discovery questionnaire](docs/Discovery-Questionnaire.md), [cutover runbook](docs/Cutover-Runbook.md), [comms templates](docs/Comms-Templates.md), [risk register](docs/Risk-Register.md), [handover template](docs/Handover-Template.md) | No |
 
-Coming as the live migration moves on: **06** groups and Teams mapping, **08** device rejoin, **09** validation, **10** source decommissioning, and **docs**: discovery questionnaire, cutover runbook, comms templates, risk register and a handover template.
+Coming as the live migration moves on: **08** device rejoin and **10** source decommissioning.
 
 ## Read this first
 
 1. [Copy options](copy-options/), to decide how the data will move. It changes how you build the destination.
-2. [01 Source inventory](01-SourceInventory/), to see what you're dealing with.
-3. [07 Domain cutover](07-DomainCutover/), so you know what cutover night looks like before you set a date.
+2. [01 Source inventory](01-SourceInventory/) and the [discovery questionnaire](docs/Discovery-Questionnaire.md), to see what you're dealing with.
+3. [07 Domain cutover](07-DomainCutover/) and the [cutover runbook](docs/Cutover-Runbook.md), so you know what cutover night looks like before you set a date.
 
 ## How the parts fit together
 
@@ -49,9 +52,11 @@ Coming as the live migration moves on: **06** groups and Teams mapping, **08** d
 4. If your tool copies archives over EWS (ShareGate does), run **03** with its app ID and both tenant IDs **before** the mail copy. Then start copying.
 5. Once people are licensed, run **04** so their OneDrives exist. Copy OneDrive after cutover, once sign-in names are final.
 6. Run **05 -Export** against the source and **05 -Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
-7. On cutover night, follow **07** in order: snapshot, release, add and verify, switch addresses.
+7. Before copying Teams or SharePoint, run **06 -Export** and **06 -Import**, so the groups exist on the right domain with their members. Then copy into them.
+8. On cutover night, follow **07** in order: snapshot, release, add and verify, switch addresses.
+9. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover.
 
-One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 07, and the user mapping in whichever copy tool you use. Build it once and keep it.
+One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 06, 07, 09, and the user mapping in whichever copy tool you use. Build it once and keep it.
 
 ## Things that apply everywhere
 
