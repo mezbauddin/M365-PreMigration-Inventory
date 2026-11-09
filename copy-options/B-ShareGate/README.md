@@ -108,7 +108,7 @@ https://fabrikam-my.sharepoint.com/personal/kim_fabrikam_com,https://contoso.sha
 ```
 
 ```powershell
-# From the ShareGate PowerShell shortcut
+# Windows PowerShell 5.1 only. From PowerShell 7, prefix with: powershell.exe -ExecutionPolicy Bypass -File
 .\Copy-DrivesWithShareGate.ps1 -CsvPath .\drives.csv -SourceAdminUrl https://fabrikam-admin.sharepoint.com `
     -DestinationAdminUrl https://contoso-admin.sharepoint.com -MappingFile .\UserMapping.sgum -WhatIf   # pre-check
 .\Copy-DrivesWithShareGate.ps1 -CsvPath .\drives.csv -SourceAdminUrl https://fabrikam-admin.sharepoint.com `

@@ -45,13 +45,12 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ShareGate Migrate installed on this PC, with a Pro or Enterprise subscription (PowerShell isn't in
-              Essentials). Run it from the ShareGate PowerShell shortcut, or Windows PowerShell with
-              Import-Module Sharegate. You need site collection admin on every source OneDrive, and the destination
+              Essentials). Windows PowerShell 5.1 only (the module won't load in PowerShell 7). You need site collection admin on every source OneDrive, and the destination
               OneDrives must already exist (part 04 of this toolkit). Not sponsored by ShareGate.
 #>
 [CmdletBinding()]
@@ -65,6 +64,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    throw 'ShareGate''s module only loads in Windows PowerShell 5.1, not PowerShell 7. Run: powershell.exe -ExecutionPolicy Bypass -File .\Copy-DrivesWithShareGate.ps1 <same parameters>'
+}
 if (-not (Get-Module -ListAvailable -Name Sharegate)) {
     throw 'The ShareGate PowerShell module isn''t available. Run this from the ShareGate PowerShell shortcut, or install ShareGate Migrate on this PC.'
 }
