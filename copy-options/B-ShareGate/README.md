@@ -1,0 +1,110 @@
+# Option B: ShareGate
+
+**TL;DR:** This is how I copied a small business's mail, archives, Teams, SharePoint and OneDrive between tenants with ShareGate Migrate, in the order I'd do it again. Most of it really is point and click. The parts that weren't are below, with the fix for each, so you don't lose an evening to them like I did.
+
+| | |
+| --- | --- |
+| Author | Mezba Uddin, Microsoft MVP |
+| Tested | Production: about 40 mailboxes, 1.7 TB of mail (most of it archives), one 140 GB SharePoint site, four Teams, 50 GB of OneDrive |
+| Tool version | ShareGate Migrate 26.11 |
+
+Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
+
+## Why ShareGate for this one
+
+- **SharePoint and Teams.** Microsoft's native route doesn't move Teams content, and its SharePoint add-on was Enterprise Agreement only. This customer wasn't on one.
+- **Size.** For about 40 people, setting up native migration (app registration, trust between tenants, identity mapping) would have taken longer than the copy itself.
+- **Incrementals.** Copy early, top up before cutover, top up again after. Same job, same mapping.
+
+## Before you open ShareGate
+
+Run these from the toolkit first. They make the ShareGate steps short:
+
+1. [01 Inventory](../../01-SourceInventory/), so you know sizes, archives and Teams.
+2. [02 Target mailboxes](../../02-TargetMailboxes/). ShareGate copies into mailboxes; it doesn't create them.
+3. [03 EWS archive readiness](../../03-EwsArchiveReadiness/) in **both** tenants with ShareGate's app ID, if you're copying archives.
+4. A user mapping CSV, source address to destination sign-in. The same file drives mail config ([05](../../05-MailConfig/)) and cutover ([07](../../07-DomainCutover/)).
+
+## 1. Mailboxes
+
+**Copy mailboxes**, source tenant to destination tenant.
+
+- **Date range:** Everything. Tick deleted items and junk if the business wants them.
+- **Archives:** tick **Copy In-Place Archive**. If you're not ready, leave it off and tick it on a later incremental pass. Already-copied mail is skipped.
+- **Mapping:** check every row. Display-name matching can pick the wrong mailbox when two people share a name, or when a mailbox already exists in the destination. Export the mapping and keep it.
+- **Incrementals:** same PC, same ShareGate install, same mapping. That's how it knows what it has already copied. Don't clear its history.
+
+**Gotchas I hit:**
+
+| What happened | Why | Fix |
+| --- | --- | --- |
+| Main mail copied, every archive failed, 'Unable to access source archive mailbox: Unauthorized' | Archives go over EWS. The source still had an old EWS app-name rule, and the new app ID allow list was missing | [03 EWS archive readiness](../../03-EwsArchiveReadiness/) in both tenants, then wait and retry |
+| Shared mailbox destinations got email but no calendar or contacts | The tool copies only email into a shared mailbox | Convert people to user mailboxes ([02](../../02-TargetMailboxes/)), then run an incremental |
+| A scheduling mailbox wouldn't convert | Bookings-style mailboxes can't become shared or user mailboxes | Leave it out, or rebuild it by hand |
+
+## 2. Teams
+
+**Copy Teams**, then choose per team:
+
+- **Copy as a new team.** ShareGate creates it. Simple, but if a team with that name already exists you get a second one, with a site URL ending in 2.
+- **Copy channels into an existing team.** Use this if you've already created the destination teams, for example so their email addresses land on the right domain.
+
+**Gotchas I hit:**
+
+| What happened | Fix |
+| --- | --- |
+| The team picker search found nothing for 'ups' in 'USPS File Opening' | Search from the start of the name |
+| I forgot to import the user mapping, so members didn't come across | Export members from the source groups and add them with `Add-UnifiedGroupLinks`, mapped through the same CSV. Import the mapping before you start next time |
+| One channel showed an error, but its files were all green | The error was on channel settings, not content. Check the details before re-running |
+
+## 3. SharePoint
+
+**Copy content**, one library at a time, into the destination site.
+
+- **Don't drop a whole site onto an existing site.** ShareGate treats that as 'make a subsite'. Expand the source site and select its libraries, then pick the destination site.
+- **Subsites** show under a **Sites** node in the source. They're separate jobs.
+- **Skip the system libraries:** Form Templates, Master Page Gallery, Site Assets, Site Pages, Style Library, Web Part Gallery.
+
+**Gotchas I hit:**
+
+| What happened | Fix |
+| --- | --- |
+| 'Copying to a Microsoft 365 site collection requires Custom Scripts to be enabled', then 'not authorized' | Allow custom scripts on the destination site yourself: `Set-SPOSite -Identity <url> -DenyAddAndCustomizePages 0`. It switches itself off again after about a day, so re-run before incrementals |
+| 'Strongly recommended to have Site Collection Administrator permissions on your source site' | `Set-SPOUser -Site <url> -LoginName <you> -IsSiteCollectionAdmin $true` on both sides |
+| The mapping import wouldn't see my CSV | It only accepts its own `.sgum` format. Convert the CSV (example below) |
+
+Converting a `Source,Destination` CSV into a `.sgum` mapping file:
+
+```powershell
+$rows = Import-Csv .\UserMapping.csv
+$x = [System.Text.StringBuilder]::new()
+[void]$x.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
+[void]$x.AppendLine('<UserAndGroupMappings xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">')
+[void]$x.AppendLine('  <Mappings>')
+foreach ($r in $rows) {
+    $s = [Security.SecurityElement]::Escape($r.Source.ToLower())
+    $d = [Security.SecurityElement]::Escape($r.Destination.ToLower())
+    [void]$x.AppendLine("    <Mapping><Source AccountName=""i:0#.f|membership|$s"" DisplayName=""$s"" PrincipalType=""User"" /><Destination AccountName=""i:0#.f|membership|$d"" DisplayName=""$d"" PrincipalType=""User"" /></Mapping>")
+}
+[void]$x.AppendLine('  </Mappings>')
+[void]$x.AppendLine('</UserAndGroupMappings>')
+[IO.File]::WriteAllText("$PWD\UserMapping.sgum", $x.ToString(), [Text.UTF8Encoding]::new($false))
+```
+
+## 4. OneDrive
+
+- Create the destination OneDrives first ([04](../../04-TargetOneDrives/)). ShareGate can't copy into one that doesn't exist.
+- Copy **after** sign-in names are final, because the OneDrive URL follows the sign-in name ([07](../../07-DomainCutover/)).
+- Leavers have no destination OneDrive. Copy theirs into a library on a SharePoint site, one folder per person.
+
+## 5. Cutover and after
+
+1. Final incremental on mail, Teams and sites, just before [domain cutover](../../07-DomainCutover/).
+2. After cutover: OneDrive, then one more incremental on everything.
+3. Re-run the custom scripts command on destination sites before any SharePoint incremental.
+
+## What I'd do differently
+
+- Import the user mapping into **every** job before clicking Start.
+- Run the EWS readiness check in both tenants on day one, not after the first archive failure.
+- Create Teams and group-connected sites myself, so their email addresses and URLs are what I want, then copy channels into them.

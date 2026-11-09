@@ -1,44 +1,71 @@
 # M365 Tenant-to-Tenant Migration Toolkit
 
-**TL;DR:** PowerShell scripts I use on Microsoft 365 tenant-to-tenant migrations, in the order I run them. Inventory the source first, then build the destination so your migration tool has somewhere to copy to. Each script has its own README with a TL;DR, requirements and the gotchas I hit.
+**TL;DR:** Everything I use to move a business from one Microsoft 365 tenant to another, in the order I use it. There's one spine of PowerShell scripts that works whatever moves the data, and three copy options: Microsoft's native cross-tenant migration, ShareGate, or no budget at all. Every script has a README with a TL;DR, why you need it, what goes wrong without it, and the gotchas I hit on a live migration. Built so someone doing their first tenant-to-tenant move can follow it start to finish.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
 | Licence | MIT |
+| Came from | A real small-business migration: about 40 mailboxes, 1.7 TB of mail and archives, SharePoint, Teams, OneDrive and three domains |
 
-## The scripts
+## The journey
 
-| # | Script | What it does | Changes anything? |
+```mermaid
+flowchart LR
+    D[Discover<br/>01] --> B[Build destination<br/>02 · 04]
+    B --> C{Copy data<br/>copy-options}
+    C --> A[Microsoft native]
+    C --> S[ShareGate]
+    C --> N[No budget]
+    A & S & N --> M[Rebuild config<br/>05]
+    M --> X[Cut over domain<br/>07]
+    X --> V[Validate<br/>09]
+    V --> R[Decommission source<br/>10]
+```
+
+| Phase | Part | What it does | Changes anything? |
 | --- | --- | --- | --- |
-| 1 | [Invoke-SourceTenantInventory](01-SourceInventory/) | Mailbox and archive sizes, permissions, users and licences, groups, lists, contacts, domains, SharePoint and OneDrive, as CSVs | No, read-only |
-| 2 | [New-TargetMailboxes](02-TargetMailboxes/) | Builds the destination mailboxes from the inventory. Stage as shared, copy, then license and convert at cutover | Yes, destination only. Supports `-WhatIf` |
-| 3 | [Test-EwsArchiveReadiness](03-EwsArchiveReadiness/) | Signs in to source and destination in turn and finds what stops archives copying over EWS: tenant switch, app ID allow list, old user-agent rules, per-mailbox blocks, consent, archive readiness. Without it, main mail copies and every archive fails | Only with `-Fix`. Supports `-WhatIf` |
-| 4 | [Request-TargetOneDrives](04-TargetOneDrives/) | Creates the destination OneDrives for everyone in the plan, in batches of 200, and reports each URL. Without it, the OneDrive copy fails for anyone who hasn't signed in yet | Yes, creates OneDrives. Supports `-WhatIf` |
-| 5 | [Copy-MailConfig](05-MailConfig/) | Exports mailbox permissions, forwarding, distribution lists and contacts from the source and rebuilds them in the destination. Transport rules exported for review. Without it, shared mailboxes arrive that nobody can open | Export: no. Import: yes, destination only. Supports `-WhatIf` |
-| 7 | [Domain cutover](07-DomainCutover/) | Records DNS, releases the domains from the source, adds and verifies them in the destination, restores old addresses with X500s, switches sign-in names, sets temporary passwords. Without it, replies to old mail bounce and the source won't let go of the domain | Yes, both tenants, in order. Supports `-WhatIf` |
+| Discover | [01 Source inventory](01-SourceInventory/) | Mailbox and archive sizes, permissions, users and licences, groups, lists, contacts, domains, SharePoint and OneDrive, as CSVs | No |
+| Build | [02 Target mailboxes](02-TargetMailboxes/) | Builds destination mailboxes from the inventory. Stage as shared, copy, then license and convert | Destination. `-WhatIf` |
+| Build | [04 Target OneDrives](04-TargetOneDrives/) | Creates destination OneDrives and reports their URLs | Destination. `-WhatIf` |
+| Copy | [Copy options](copy-options/) | [A. Microsoft native](copy-options/A-Microsoft-native/), [B. ShareGate](copy-options/B-ShareGate/), [C. No budget](copy-options/C-No-budget/), with a comparison to help you choose | Depends on option |
+| Copy | [03 EWS archive readiness](03-EwsArchiveReadiness/) | If your tool copies archives over EWS: checks and fixes both tenants. Without it, mail copies and every archive fails | Only with `-Fix` |
+| Rebuild | [05 Mail config](05-MailConfig/) | Permissions, forwarding, distribution lists and contacts, exported and rebuilt. Without it, shared mailboxes arrive that nobody can open | Destination on import. `-WhatIf` |
+| Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, release from source, add and verify in destination, old addresses with X500s, sign-in names, temporary passwords | Both tenants, in order. `-WhatIf` |
 
-More to come as the migration I'm running moves on: groups and Teams mapping, validation, device rejoin, source decommissioning and a handover pack.
+Coming as the live migration moves on: **06** groups and Teams mapping, **08** device rejoin, **09** validation, **10** source decommissioning, and **docs**: discovery questionnaire, cutover runbook, comms templates, risk register and a handover template.
 
-EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy archives over EWS stop working then.
+## Read this first
 
-## How they fit together
+1. [Copy options](copy-options/), to decide how the data will move. It changes how you build the destination.
+2. [01 Source inventory](01-SourceInventory/), to see what you're dealing with.
+3. [07 Domain cutover](07-DomainCutover/), so you know what cutover night looks like before you set a date.
 
-1. Run **Invoke-SourceTenantInventory** against the source. It writes `Inventory-<tenant>-<date>\04-Mailboxes.csv` and friends.
-2. Run **New-TargetMailboxes -Plan** in the same folder. It finds the inventory and writes `TargetBuildPlan.csv`. Review it.
-3. Run **New-TargetMailboxes -Apply -StageOnly** against the destination.
-4. If your tool copies In-Place Archives, run **Test-EwsArchiveReadiness** with its app ID and both tenant IDs **before** you start the mail copy. Then start the copy.
-5. Once people are licensed, run **Request-TargetOneDrives** so their OneDrives are ready. Copy them after cutover.
-6. Run **Copy-MailConfig -Export** against the source, then **-Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
-7. On cutover night, follow the **Domain cutover** scripts in order: snapshot, release, add and verify, switch addresses.
+## How the parts fit together
 
-## Two tenants, one PC
+1. Run **01** against the source. It writes `Inventory-<tenant>-<date>\` with `04-Mailboxes.csv` and the rest.
+2. Choose your copy option. For **Microsoft native**, read its identity note first: it needs mail users in the destination, not mailboxes.
+3. Run **02 -Plan** in the same folder, review `TargetBuildPlan.csv`, then **02 -Apply -StageOnly** against the destination.
+4. If your tool copies archives over EWS (ShareGate does), run **03** with its app ID and both tenant IDs **before** the mail copy. Then start copying.
+5. Once people are licensed, run **04** so their OneDrives exist. Copy OneDrive after cutover, once sign-in names are final.
+6. Run **05 -Export** against the source and **05 -Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
+7. On cutover night, follow **07** in order: snapshot, release, add and verify, switch addresses.
 
-You'll be signed in to two tenants from the same machine for weeks. Windows quietly reuses your last sign-in, so `Connect-ExchangeOnline` or `Connect-MgGraph` can land you in the wrong tenant without asking. Scripts in this toolkit that change things check the tenant ID before they do. When you run commands by hand, name the account (`-UserPrincipalName`) or the tenant (`-TenantId`), and check `Get-ConnectionInformation` before anything destructive.
+One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 07, and the user mapping in whichever copy tool you use. Build it once and keep it.
 
-## A word on the output
+## Things that apply everywhere
 
-The CSVs these scripts write hold tenant data: names, addresses, permissions and, for script 2, temporary passwords. The `.gitignore` keeps them out of commits. Keep them out of email and shared drives too.
+**Two tenants, one PC.** You'll be signed in to two tenants from the same machine for weeks. Windows quietly reuses your last sign-in, so `Connect-ExchangeOnline` or `Connect-MgGraph` can land you in the wrong tenant without asking. The scripts that change things check the tenant ID first. When you run commands by hand, name the account (`-UserPrincipalName`) or the tenant (`-TenantId`), and check `Get-ConnectionInformation` before anything destructive.
+
+**EWS ends on 1 April 2027.** Tools and scripts that copy archives over EWS stop working then. Move big archives before it.
+
+**The output is sensitive.** The CSVs hold names, addresses, permissions and, from some steps, temporary passwords. The `.gitignore` keeps them out of commits. Keep them out of email and shared drives too.
+
+**What this doesn't move:** Teams chats, Planner, Power Platform, Intune policies, Conditional Access and other tenant settings. Rebuild those deliberately; don't copy a mess.
+
+## Disclosure
+
+Not sponsored by anyone. Where I name a product, it's because I used it on the job.
 
 ## Older links
 
