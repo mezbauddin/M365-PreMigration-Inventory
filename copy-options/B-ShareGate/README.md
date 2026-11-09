@@ -97,6 +97,28 @@ foreach ($r in $rows) {
 - Copy **after** sign-in names are final, because the OneDrive URL follows the sign-in name ([07](../../07-DomainCutover/)).
 - Leavers have no destination OneDrive. Copy theirs into a library on a SharePoint site, one folder per person.
 
+### Many OneDrives at once: `Copy-DrivesWithShareGate.ps1`
+
+The app copies OneDrives one at a time. ShareGate's PowerShell module (Pro and Enterprise plans) doesn't have that limit. [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) reads a CSV of source and destination pairs, signs in to each tenant once, and runs `Copy-Content` for every row with your `.sgum` mapping. Each row can land in the person's new OneDrive or in a folder of a library, for example leavers' OneDrives into an archive library.
+
+```text
+Source,DestinationSite,DestinationLibrary,DestinationFolder
+https://fabrikam-my.sharepoint.com/personal/alex_fabrikam_com,https://contoso-my.sharepoint.com/personal/alex_contoso_com,,
+https://fabrikam-my.sharepoint.com/personal/kim_fabrikam_com,https://contoso.sharepoint.com/sites/Archive,Former Staff OneDrive,kim
+```
+
+```powershell
+# From the ShareGate PowerShell shortcut
+.\Copy-DrivesWithShareGate.ps1 -CsvPath .\drives.csv -SourceAdminUrl https://fabrikam-admin.sharepoint.com `
+    -DestinationAdminUrl https://contoso-admin.sharepoint.com -MappingFile .\UserMapping.sgum -WhatIf   # pre-check
+.\Copy-DrivesWithShareGate.ps1 -CsvPath .\drives.csv -SourceAdminUrl https://fabrikam-admin.sharepoint.com `
+    -DestinationAdminUrl https://contoso-admin.sharepoint.com -MappingFile .\UserMapping.sgum
+# Later, top up
+.\Copy-DrivesWithShareGate.ps1 ... -Incremental
+```
+
+Destination folders must exist first. You need site collection admin on every source OneDrive, and the destination OneDrives must exist ([04](../../04-TargetOneDrives/)).
+
 ## 5. Cutover and after
 
 1. Final incremental on mail, Teams and sites, just before [domain cutover](../../07-DomainCutover/).
