@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Author | Mezba Uddin (Microsoft MVP) |
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Runs against | Both tenants, read-only |
 | Needs | ExchangeOnlineManagement 3.x, View-Only Recipients (or higher) in both tenants |
 
@@ -34,13 +34,19 @@ In this order, first hit wins:
 | # | Method | Notes |
 |---|---|---|
 | 1 | Overrides file | Your decisions. A blank Destination leaves that source out (leavers, test accounts) |
-| 2 | Toolkit tag | Lists and contacts created by 05 and 06 carry the source address in `CustomAttribute15` |
-| 3 | Old address | The destination already holds the source address as an alias (staged mailboxes, after cutover) |
-| 4 | Alias | Only if exactly one destination object has it |
-| 5 | Address local part | `alex@fabrikam.com` to `alex@contoso.com`, only if unique |
-| 6 | Display name | Only if unique, and always flagged for review |
+| 2 | Build plan | Part 02's `TargetBuildPlan.csv` (`-PlanFile`). The best source for mailboxes you staged under a different alias |
+| 3 | Toolkit tag | Lists and contacts created by 05 and 06 carry the source address in `CustomAttribute15` |
+| 4 | Old address | The destination already holds the source address as an alias (staged mailboxes, after cutover) |
+| 5 | Alias | Tries `-AliasPrefix` + alias first. Only if exactly one destination object has it |
+| 6 | Address local part | `alex@fabrikam.com` to `alex@contoso.com`, same prefix rule, only if unique |
+| 7 | Display name | Only if unique, and always flagged for review |
 
-It also flags a match where a mailbox maps to a non-mailbox, and two sources mapped to the same destination.
+Rules on top:
+
+- **A guest is never a match.** Guests in the destination often carry the person's old address, so step 4 would happily pick them.
+- **A mailbox only maps to a mailbox.**
+- **`-DestinationDomain` scopes steps 5 to 7** to the domains this migration owns. Without it, in a destination with several domains, every alias and local part guess is flagged for review.
+- Two sources mapped to the same destination are flagged.
 
 ## Run it
 
@@ -53,6 +59,9 @@ It also flags a match where a mailbox maps to a non-mailbox, and two sources map
 
 # Your decisions for the ones it couldn't work out
 .\New-UserMapping.ps1 -OverridesFile .\MappingOverrides.csv
+
+# Destination already hosts other companies, staged objects prefixed 'fab-'
+.\New-UserMapping.ps1 -PlanFile .\TargetBuildPlan.csv -DestinationDomain contoso.com, fabstage.com -AliasPrefix fab-
 ```
 
 `MappingOverrides.csv`:
@@ -76,6 +85,7 @@ Fix what's in the review list with the overrides file and run it again until the
 ## Lessons learned
 
 - **Run it twice.** Once after 02, and again after [07](../07-DomainCutover/). Sign-in names change at cutover, and the `.sgum` maps by sign-in name. An incremental with the old file maps nobody.
+- **Test it against reality before trusting it.** My first version agreed with our hand-built mapping on 272 of 278. The other 6 found two real flaws: it matched people to their own guest accounts, and it matched a shared mailbox to another company's mailbox of the same name in the destination. Hence the guest rule, the build plan and `-DestinationDomain`.
 - **Display name is a last resort.** Two "Pat Jones" is more common than you'd think. The script refuses a name match that isn't unique and flags every name match it does make.
 - **Leavers belong in the overrides file**, not left unmatched. "Unmatched" should mean "I haven't decided yet", so the review list stays useful.
 - **Keep the output out of source control.** It's a list of every person and address in two companies.

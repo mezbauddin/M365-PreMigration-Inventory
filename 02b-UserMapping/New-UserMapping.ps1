@@ -10,11 +10,15 @@
     contact, and matches them in this order:
 
       1. Overrides file          your own decisions, always win (blank Destination = leave this one out)
-      2. Toolkit tag             objects 05 and 06 created carry the source address in CustomAttribute15
-      3. Old address             the destination already has the source address as an alias
-      4. Alias                   same alias, one match only
-      5. Address local part      alex@fabrikam.com -> alex@contoso.com, one match only
-      6. Display name            one match only, and flagged for review
+      2. Build plan              part 02's TargetBuildPlan.csv: SourceAddress -> TargetAddress
+      3. Toolkit tag             objects 05 and 06 created carry the source address in CustomAttribute15
+      4. Old address             the destination already has the source address as an alias
+      5. Alias                   same alias (with -AliasPrefix too), one match only
+      6. Address local part      alex@fabrikam.com -> alex@contoso.com, one match only
+      7. Display name            one match only, and flagged for review
+
+    Guest accounts are never a match, and a mailbox only ever maps to a mailbox. If the destination tenant also hosts
+    other companies, pass -DestinationDomain so steps 5 to 7 can't pick someone else's 'info@' or 'closings@'.
 
     Nothing in either tenant is changed. You get:
       UserMapping.csv          Source,Destination (+ type, method). Matched rows only. This is the file 05, 06, 07, 09 use
@@ -30,6 +34,18 @@
 .PARAMETER OverridesFile
     Optional CSV with Source,Destination. Wins over every automatic match. A blank Destination leaves the source out
     of the mapping (leavers you aren't moving, test accounts).
+
+.PARAMETER PlanFile
+    Optional. Part 02's TargetBuildPlan.csv. Its SourceAddress -> TargetAddress rows (Include = True) are used before
+    any guessing, which matters when staged mailboxes have a different alias (a prefix, a renamed shared mailbox).
+
+.PARAMETER DestinationDomain
+    Optional. Destination domains this migration owns (staging domain, onmicrosoft domain). Steps 5 to 7 only match
+    destination objects on these domains. Use it whenever the destination tenant has other companies' mailboxes.
+
+.PARAMETER AliasPrefix
+    Optional. A prefix you gave staged objects in the destination, e.g. 'fab-'. Alias and local part matching also try
+    '<prefix><alias>', and prefer it.
 
 .PARAMETER Exclude
     Source addresses or wildcards to leave out, e.g. 'healthmailbox*','discoverysearch*'.
@@ -49,7 +65,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.1.0
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -62,6 +78,9 @@ param(
     [string]$SourceAdmin,
     [string]$DestinationAdmin,
     [string]$OverridesFile,
+    [string]$PlanFile,
+    [string[]]$DestinationDomain,
+    [string]$AliasPrefix,
     [string[]]$Exclude = @('healthmailbox*', 'discoverysearchmailbox*', 'systemmailbox*'),
     [string]$CompareWith,
     [string]$OutputFolder = '.'
@@ -128,7 +147,30 @@ if ($OverridesFile) {
     Write-Host "$($overrides.Count) override(s) loaded." -ForegroundColor Cyan
 }
 
-function Get-One($h, $k) { if ($k -and $h.ContainsKey($k)) { $l = @($h[$k] | Sort-Object Address -Unique); if ($l.Count -eq 1) { return $l[0] } elseif ($l.Count -gt 1) { return 'many' } } }
+$domains = @($DestinationDomain | Where-Object { $_ } | ForEach-Object { $_.ToLower().TrimStart('@') })
+function Test-Fit($s, $d, [switch]$Scoped) {
+    if ($d.Type -match 'Guest') { return $false }                                   # a guest is never the new home
+    if (($s.Type -match 'Mailbox$' -and $s.Type -ne 'GroupMailbox') -and -not ($d.Type -match 'Mailbox$' -and $d.Type -ne 'GroupMailbox')) { return $false }
+    if ($Scoped -and $domains) { return [bool](@($d.Address, $d.Upn) | Where-Object { $_ -and $domains -contains $_.Split('@')[-1] }) }
+    $true
+}
+function Get-One($h, $k, $s, [switch]$Scoped) {
+    if ($k -and $h.ContainsKey($k)) {
+        $l = @($h[$k] | Where-Object { Test-Fit $s $_ -Scoped:$Scoped } | Sort-Object Address -Unique)
+        if ($l.Count -eq 1) { return $l[0] } elseif ($l.Count -gt 1) { return 'many' }
+    }
+}
+
+$plan = @{}
+if ($PlanFile) {
+    foreach ($p in Import-Csv $PlanFile | Where-Object { $_.Include -eq 'True' }) { $plan["$($p.SourceAddress)".Trim().ToLower()] = "$($p.TargetAddress)".Trim().ToLower() }
+    Write-Host "$($plan.Count) row(s) from the build plan." -ForegroundColor Cyan
+}
+$destAccepted = @($dst.Rows | ForEach-Object { $_.Address.Split('@')[-1] } | Sort-Object -Unique)
+$unscoped = (-not $domains -and $destAccepted.Count -gt 3)
+if ($unscoped) {
+    Write-Warning "The destination has addresses on $($destAccepted.Count) domains. If it hosts other companies, re-run with -DestinationDomain so alias and name matches can't land on their mailboxes."
+}
 
 $review = foreach ($s in $src.Rows) {
     $match = $null; $method = ''; $note = ''
@@ -139,13 +181,20 @@ $review = foreach ($s in $src.Rows) {
         elseif ($dstByKey.ContainsKey($t)) { $match = $dstByKey[$t]; $method = 'Override' }
         else { $method = 'Override'; $note = "Override target $t not found in the destination" }
     }
+    elseif ($plan.ContainsKey($s.Address)) {
+        $t = $plan[$s.Address]
+        $hit = if ($dstByKey.ContainsKey($t)) { $dstByKey[$t] } else { Get-One $byProxy $t $s }
+        if ($hit -and $hit -ne 'many') { $match = $hit; $method = 'Build plan' }
+        else { $method = 'Build plan'; $note = "Plan target $t not found in the destination" }
+    }
     else {
+        $p = "$AliasPrefix".ToLower()
         foreach ($step in @(
-                @{ M = 'Toolkit tag'; F = { Get-One $byTag $s.Address } },
-                @{ M = 'Old address'; F = { foreach ($a in @($s.Address) + $s.Smtp) { $r = Get-One $byProxy $a; if ($r) { return $r } } } },
-                @{ M = 'Alias'; F = { Get-One $byAlias $s.Alias } },
-                @{ M = 'Local part'; F = { Get-One $byLocal $s.Local } },
-                @{ M = 'Display name'; F = { Get-One $byName $s.Name } })) {
+                @{ M = 'Toolkit tag'; F = { Get-One $byTag $s.Address $s } },
+                @{ M = 'Old address'; F = { foreach ($a in @($s.Address) + $s.Smtp) { $r = Get-One $byProxy $a $s; if ($r) { return $r } } } },
+                @{ M = 'Alias'; F = { if ($p) { $r = Get-One $byAlias "$p$($s.Alias)" $s -Scoped; if ($r) { return $r } }; Get-One $byAlias $s.Alias $s -Scoped } },
+                @{ M = 'Local part'; F = { if ($p) { $r = Get-One $byLocal "$p$($s.Local)" $s -Scoped; if ($r) { return $r } }; Get-One $byLocal $s.Local $s -Scoped } },
+                @{ M = 'Display name'; F = { Get-One $byName $s.Name $s -Scoped } })) {
             $r = & $step.F
             if ($r -eq 'many') { $note = "$($step.M) matches more than one destination object"; continue }
             if ($r) { $match = $r; $method = $step.M; break }
@@ -154,6 +203,7 @@ $review = foreach ($s in $src.Rows) {
     }
     $needsLook = (-not $match -and $method -notlike 'Excluded*') -or $method -eq 'Display name' -or [bool]$note
     if ($match -and $method -eq 'Display name') { $note = 'Matched on name only. Check it''s the same person' }
+    elseif ($match -and $unscoped -and $method -in 'Alias', 'Local part') { $needsLook = $true; $note = "Guessed by $($method.ToLower()) in a tenant with several domains. Confirm, or re-run with -DestinationDomain" }
     if ($match -and ($s.Type -match 'Mailbox') -ne ($match.Type -match 'Mailbox')) { $needsLook = $true; $note = (@($note, "Type differs: $($s.Type) -> $($match.Type)") | Where-Object { $_ }) -join '. ' }
     [pscustomobject]@{
         Source          = $s.Address
