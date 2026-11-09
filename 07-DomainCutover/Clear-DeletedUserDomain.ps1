@@ -23,7 +23,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -58,19 +58,23 @@ $log = foreach ($u in $hits) {
     if (-not $PSCmdlet.ShouldProcess("$($u.displayName) ($name)", "Restore as $new, block, delete again")) {
         [pscustomobject]@{ User = $u.userPrincipalName; NewSignIn = $new; Result = 'WhatIf'; Detail = '' }; continue
     }
+    $step = 'restore'
     try {
         Invoke-MgGraphRequest POST "v1.0/directory/deletedItems/$($u.id)/restore" -ContentType 'application/json' `
             -Body (@{ newUserPrincipalName = $new; autoReconcileProxyConflict = $true } | ConvertTo-Json) | Out-Null
-        Invoke-MgGraphRequest PATCH "v1.0/users/$($u.id)" -ContentType 'application/json' -Body (@{ accountEnabled = $false } | ConvertTo-Json)
-        Invoke-MgGraphRequest DELETE "v1.0/users/$($u.id)"
+        $step = 'block sign-in'
+        Invoke-MgGraphRequest PATCH "v1.0/users/$($u.id)" -ContentType 'application/json' -Body (@{ accountEnabled = $false } | ConvertTo-Json) | Out-Null
+        $step = 'delete again'
+        Invoke-MgGraphRequest DELETE "v1.0/users/$($u.id)" | Out-Null
         Write-Host "  OK   $name -> $new (back in the recycle bin)" -ForegroundColor Green
         [pscustomobject]@{ User = $u.userPrincipalName; NewSignIn = $new; Result = 'Done'; Detail = '' }
     }
     catch {
-        Write-Host "  FAIL $name : $($_.Exception.Message)" -ForegroundColor Red
-        [pscustomobject]@{ User = $u.userPrincipalName; NewSignIn = $new; Result = 'Problem'; Detail = $_.Exception.Message }
+        $why = if ("$($_.Exception.Message)" -match 'Forbidden' -and $step -eq 'restore') { ' Usually the account held an admin role: restoring it needs Privileged Role Administrator or Global Administrator.' } else { '' }
+        Write-Host "  FAIL $name at '$step': $($_.Exception.Message)$why" -ForegroundColor Red
+        [pscustomobject]@{ User = $u.userPrincipalName; NewSignIn = $new; Result = 'Problem'; Detail = "$step : $($_.Exception.Message)$why" }
     }
 }
 $file = ".\ClearDeletedUserDomain-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$log | Export-Csv $file -NoTypeInformation -WhatIf:$false
+@($log | Where-Object { $_ }) | Export-Csv $file -NoTypeInformation -WhatIf:$false
 Write-Host "Report: $file" -ForegroundColor Cyan
