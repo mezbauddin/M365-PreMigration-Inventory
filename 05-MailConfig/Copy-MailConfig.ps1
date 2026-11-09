@@ -62,7 +62,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -165,7 +165,7 @@ if ($Export) {
     $groupRows = foreach ($g in $groups) {
         $gAddr = "$($g.PrimarySmtpAddress)".ToLower()
         Get-DistributionGroupMember -Identity $g.ExternalDirectoryObjectId -ResultSize Unlimited -ErrorAction SilentlyContinue | ForEach-Object {
-            $members.Add([pscustomobject]@{ Group = $gAddr; Member = "$($_.PrimarySmtpAddress)".ToLower(); MemberType = $_.RecipientType })
+            $members.Add([pscustomobject]@{ Group = $gAddr; Member = "$($_.PrimarySmtpAddress)".ToLower(); MemberName = $_.Name; MemberType = $_.RecipientTypeDetails })
         }
         [pscustomobject]@{
             DisplayName                        = $g.DisplayName
@@ -307,6 +307,7 @@ if ($Include -contains 'DistributionGroups') {
     foreach ($row in Import-Csv (Join-Path $ExportFolder 'DistributionGroupMembers.csv')) {
         $list = Get-Mapped $row.Group
         if (-not $list) { continue }   # the list itself was skipped or failed, already logged
+        if (-not $row.Member) { Write-Log 'Member' "$($row.MemberName) -> $list" 'Skipped' "Has no email address in the source ($($row.MemberType)), so it can't be a list member here"; continue }
         $member = Get-Mapped $row.Member
         if (-not $member) { Write-Log 'Member' "$($row.Member) -> $list" 'Skipped' 'No mapping for this member'; continue }
         if (-not $WhatIfPreference -and -not $current.ContainsKey($list)) {

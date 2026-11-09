@@ -27,6 +27,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Discover | [01 Source inventory](01-SourceInventory/) | Mailbox and archive sizes, permissions, users and licences, groups, lists, contacts, domains, SharePoint and OneDrive, as CSVs | No |
 | Build | [02 Target mailboxes](02-TargetMailboxes/) | Builds destination mailboxes from the inventory. Stage as shared, copy, then license and convert | Destination. `-WhatIf` |
+| Build | [02b User mapping](02b-UserMapping/) | Reads both tenants and matches every mailbox, list and contact (tag, old address, alias, name). Writes the mapping CSV, a ShareGate `.sgum` and a review list. Without it, one typo puts permissions on the wrong person | No |
 | Build | [04 Target OneDrives](04-TargetOneDrives/) | Creates destination OneDrives and reports their URLs | Destination. `-WhatIf` |
 | Copy | [Copy options](copy-options/) | [A. Microsoft native](copy-options/A-Microsoft-native/), [B. ShareGate](copy-options/B-ShareGate/), [C. No budget](copy-options/C-No-budget/), with a comparison to help you choose | Depends on option |
 | Copy | [03 EWS archive readiness](03-EwsArchiveReadiness/) | If your tool copies archives over EWS: checks and fixes both tenants. Without it, mail copies and every archive fails | Only with `-Fix` |
@@ -56,7 +57,7 @@ Coming as the live migration moves on: **08** device rejoin and **10** source de
 8. On cutover night, follow **07** in order: snapshot, release, add and verify, switch addresses.
 9. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover.
 
-One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 06, 07, 09, and the user mapping in whichever copy tool you use. Build it once and keep it.
+One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 06, 07, 09, and the user mapping in whichever copy tool you use. Build it with [02b](02b-UserMapping/) after 02, and again after cutover, because sign-in names change.
 
 ## Things that apply everywhere
 

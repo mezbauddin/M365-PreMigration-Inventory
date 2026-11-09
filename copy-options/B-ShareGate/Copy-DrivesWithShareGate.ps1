@@ -125,5 +125,5 @@ $report = foreach ($row in $rows) {
 $file = ".\DriveCopy-ShareGate-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
 $report | Export-Csv $file -NoTypeInformation
 Write-Host ''
-$report | Format-Table Source, Result, Successes, Warnings, Errors -AutoSize | Out-Host
+$report | Format-Table Source, Result, Successes, Warnings, Errors -AutoSize | Out-String -Width 250 | Write-Host
 Write-Host "Report: $file. Item-level detail is in ShareGate's Tasks, under each 'T2T <name>' task." -ForegroundColor Cyan
