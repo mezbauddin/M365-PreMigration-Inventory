@@ -34,9 +34,21 @@ Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration 
 
 Build the destination ([02](../../02-TargetMailboxes/)), rebuild permissions, lists and forwarding ([05](../../05-MailConfig/)), and cut over the domain ([07](../../07-DomainCutover/)) exactly as you would with a tool. The X500 step in 07 matters even more here: imported mail still carries the old internal addresses.
 
-## Scripts planned for this folder
+## Scripts
 
-| Script | Purpose |
-| --- | --- |
-| `New-PstImportMapping.ps1` | Builds the PST import mapping CSV from the toolkit's user mapping |
-| `Copy-LibraryWithPnP.ps1` | Library to library copy between tenants through a local folder, with a report of what didn't make it |
+| Script | Status | Purpose |
+| --- | --- | --- |
+| [`Copy-DriveViaGraph.ps1`](Copy-DriveViaGraph.ps1) | 1.0.0 | OneDrive or library copy between tenants with only Microsoft Graph. `-Download` from the source to a local folder, then `-Upload` into the destination, keeping folders and file dates. Skips what's already done, so re-runs are safe. Large files go up in 10 MB chunks |
+| `New-PstImportMapping.ps1` | Planned | Builds the PST import mapping CSV from the toolkit's user mapping |
+
+```powershell
+# Source: download each OneDrive into C:\T2T\<name>
+.\Copy-DriveViaGraph.ps1 -Download -TenantId <source-guid> -LocalPath C:\T2T -SourceSiteUrl `
+    https://fabrikam-my.sharepoint.com/personal/alex_fabrikam_com, https://fabrikam-my.sharepoint.com/personal/kim_fabrikam_com
+
+# Destination: upload each C:\T2T\<name> into a folder of the same name in a library
+.\Copy-DriveViaGraph.ps1 -Upload -TenantId <dest-guid> -LocalPath C:\T2T `
+    -DestinationSiteUrl https://contoso.sharepoint.com/sites/Archive -DestinationLibrary 'Former Staff OneDrive'
+```
+
+It's a good fit for leavers' OneDrives: small, nobody working in them, no need for version history. Archived OneDrives (unlicensed for months) can't be read until they're reactivated.
