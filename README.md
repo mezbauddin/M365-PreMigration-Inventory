@@ -16,8 +16,9 @@
 | 3 | [Test-EwsArchiveReadiness](03-EwsArchiveReadiness/) | Signs in to source and destination in turn and finds what stops archives copying over EWS: tenant switch, app ID allow list, old user-agent rules, per-mailbox blocks, consent, archive readiness. Without it, main mail copies and every archive fails | Only with `-Fix`. Supports `-WhatIf` |
 | 4 | [Request-TargetOneDrives](04-TargetOneDrives/) | Creates the destination OneDrives for everyone in the plan, in batches of 200, and reports each URL. Without it, the OneDrive copy fails for anyone who hasn't signed in yet | Yes, creates OneDrives. Supports `-WhatIf` |
 | 5 | [Copy-MailConfig](05-MailConfig/) | Exports mailbox permissions, forwarding, distribution lists and contacts from the source and rebuilds them in the destination. Transport rules exported for review. Without it, shared mailboxes arrive that nobody can open | Export: no. Import: yes, destination only. Supports `-WhatIf` |
+| 7 | [Domain cutover](07-DomainCutover/) | Records DNS, releases the domains from the source, adds and verifies them in the destination, restores old addresses with X500s, switches sign-in names, sets temporary passwords. Without it, replies to old mail bounce and the source won't let go of the domain | Yes, both tenants, in order. Supports `-WhatIf` |
 
-More to come as the migration I'm running moves on: the domain cutover, validation, device rejoin, source decommissioning and a handover pack.
+More to come as the migration I'm running moves on: groups and Teams mapping, validation, device rejoin, source decommissioning and a handover pack.
 
 EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy archives over EWS stop working then.
 
@@ -29,6 +30,7 @@ EWS in Exchange Online is retired on 1 April 2027. Scripts and tools that copy a
 4. If your tool copies In-Place Archives, run **Test-EwsArchiveReadiness** with its app ID and both tenant IDs **before** you start the mail copy. Then start the copy.
 5. Once people are licensed, run **Request-TargetOneDrives** so their OneDrives are ready. Copy them after cutover.
 6. Run **Copy-MailConfig -Export** against the source, then **-Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
+7. On cutover night, follow the **Domain cutover** scripts in order: snapshot, release, add and verify, switch addresses.
 
 ## Two tenants, one PC
 
