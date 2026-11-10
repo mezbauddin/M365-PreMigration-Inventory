@@ -1,24 +1,29 @@
 <#
 .SYNOPSIS
     Exports the mail configuration a migration tool doesn't copy from the source tenant, and rebuilds it in the
-    destination: mailbox permissions, forwarding, distribution lists, mail contacts. Transport rules are exported
-    for review.
+    destination: mailbox permissions, calendar and folder permissions, forwarding, distribution lists, mail contacts.
+    Transport rules are exported for review; inbox rules and automatic replies are listed to check after cutover.
 
 .DESCRIPTION
     TL;DR: Mailbox copy tools move the mail. They don't move who can open whose mailbox, who can send as whom,
-    forwarding, distribution lists or contacts. Run -Export against the source, then -Import against the destination
+    who can see or edit whose calendar, forwarding, distribution lists or contacts. Run -Export against the source, then -Import against the destination
     with a mapping CSV (Source,Destination). Import is safe to re-run: anything it already created is recognised and
     left alone. Everything supports -WhatIf.
 
     -Export writes a folder of CSVs:
       Permissions.csv            Full Access, Send As and Send on Behalf, per mailbox
+      FolderPermissions.csv      Calendar permissions (and Inbox, Contacts with -IncludeFolders), including calendar
+                                 delegates. Default and Anonymous only when changed from the defaults
+      CheckAfterCutover.csv      Report only: inbox rule counts (and rules that forward) and automatic reply state,
+                                 per mailbox that has either. Not imported
       Forwarding.csv             Mailbox forwarding, marked internal or external
       DistributionGroups.csv     Distribution lists and mail-enabled security groups, with settings and owners
       DistributionGroupMembers.csv
       DynamicGroups.csv          Dynamic distribution lists and their filters (rebuild by hand)
       MailContacts.csv
       TransportRules.csv         Rule summary. TransportRules.xml holds the full export
-    -Import rebuilds, in this order: contacts, distribution lists, their members, permissions, forwarding.
+    -Import rebuilds, in this order: contacts, distribution lists, their members, permissions, folder permissions,
+    forwarding.
 
 .PARAMETER Export
     Read the source tenant and write the export folder. Changes nothing.
@@ -37,6 +42,15 @@
 .PARAMETER OutputFolder
     With -Export: where to write. Defaults to .\MailConfig-<domain>-<date>.
 
+.PARAMETER IncludeFolders
+    With -Export: also export permissions on these default folders, as well as Calendar. Inbox, Contacts.
+
+.PARAMETER SkipFolderPermissions
+    With -Export: don't read folder permissions. Faster on big tenants; FolderPermissions.csv isn't written.
+
+.PARAMETER SkipMailboxChecks
+    With -Export: don't read inbox rules and automatic replies. CheckAfterCutover.csv isn't written.
+
 .PARAMETER ExportFolder
     With -Import: the folder -Export wrote.
 
@@ -52,7 +66,8 @@
     With -Import: prefix for new distribution list aliases, for when the destination already uses names like 'info'.
 
 .PARAMETER Include
-    With -Import: which parts to rebuild. Default: Contacts, DistributionGroups, Permissions, Forwarding.
+    With -Import: which parts to rebuild. Default: Contacts, DistributionGroups, Permissions, FolderPermissions,
+    Forwarding.
 
 .PARAMETER IncludeExternalForwarding
     With -Import: also recreate forwarding to addresses outside the organisation. Off by default, because it sends
@@ -67,14 +82,27 @@
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Export -TenantId <source-guid> -AdminUpn admin@fabrikam.com
 
+.EXAMPLE
+    .\Copy-MailConfig.ps1 -Export -TenantId <source-guid> -AdminUpn admin@fabrikam.com -IncludeFolders Inbox, Contacts
+
+.EXAMPLE
+    .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -AdminUpn admin@contoso.onmicrosoft.com -ExportFolder .\MailConfig-fabrikam.com-20261109-1100 `
+        -MappingFile .\UserMapping.csv -AddressDomain contoso.com -Include FolderPermissions -WhatIf
+
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.2.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x. Exchange Administrator. Objects this script creates are tagged with
               CustomAttribute15 = 'T2T:<source address>' so re-runs and the cutover step can find them.
+    Folder permissions are rebuilt with Add-MailboxFolderPermission or Set-MailboxFolderPermission on the
+    destination's own folder name (Calendar can be called Kalender or Agenda), found with
+    Get-EXOMailboxFolderStatistics -FolderScope.
+    Inbox rules and automatic replies are content of the mailbox: native cross-tenant moves carry them, ShareGate
+    copies inbox rules (except a few rule options) and some automatic reply settings, and many other tools copy
+    neither. CheckAfterCutover.csv is the list to check against, whatever moved the mail.
     Transport rules are exported, never imported. Import-TransportRuleCollection is retired in Exchange Online (it
     used to replace the whole rule collection), and rules usually point at source-only recipients and domains.
     TransportRules.xml holds a New-TransportRule command per rule: review each one, fix the addresses, and run it
@@ -88,13 +116,16 @@ param(
     [string]$AdminUpn,
 
     [Parameter(ParameterSetName = 'Export')][string]$OutputFolder,
+    [Parameter(ParameterSetName = 'Export')][ValidateSet('Inbox', 'Contacts')][string[]]$IncludeFolders = @(),
+    [Parameter(ParameterSetName = 'Export')][switch]$SkipFolderPermissions,
+    [Parameter(ParameterSetName = 'Export')][switch]$SkipMailboxChecks,
 
     [Parameter(ParameterSetName = 'Import', Mandatory)][string]$ExportFolder,
     [Parameter(ParameterSetName = 'Import', Mandatory)][string]$MappingFile,
     [Parameter(ParameterSetName = 'Import', Mandatory)][string]$AddressDomain,
     [Parameter(ParameterSetName = 'Import')][string]$AliasPrefix = '',
-    [Parameter(ParameterSetName = 'Import')][ValidateSet('Contacts', 'DistributionGroups', 'Permissions', 'Forwarding')]
-    [string[]]$Include = @('Contacts', 'DistributionGroups', 'Permissions', 'Forwarding'),
+    [Parameter(ParameterSetName = 'Import')][ValidateSet('Contacts', 'DistributionGroups', 'Permissions', 'FolderPermissions', 'Forwarding')]
+    [string[]]$Include = @('Contacts', 'DistributionGroups', 'Permissions', 'FolderPermissions', 'Forwarding'),
     [Parameter(ParameterSetName = 'Import')][switch]$IncludeExternalForwarding
 )
 
@@ -128,6 +159,20 @@ Write-Host "Connected to $tenantName" -ForegroundColor Cyan
 function Get-SmtpOnly($a) { if ($a) { ("$a" -replace '^smtp:', '').Trim().ToLower() } }
 function Get-Tag($src) { "T2T:$($src.ToLower())" }
 
+# Folder names are localised (Calendar, Kalender, Agenda), so find the real path from the folder type.
+$folderPathCache = @{}
+function Get-DefaultFolderPath([string]$Mailbox, [string]$FolderType) {
+    $k = "$Mailbox|$FolderType"
+    if (-not $folderPathCache.ContainsKey($k)) {
+        $f = Get-EXOMailboxFolderStatistics -Identity $Mailbox -FolderScope $FolderType -ErrorAction SilentlyContinue |
+            Where-Object { "$($_.FolderType)" -eq $FolderType } | Select-Object -First 1
+        $folderPathCache[$k] = if ($f) { "$($f.FolderPath)" -replace '/', '\' } else { $null }
+    }
+    $folderPathCache[$k]
+}
+# What Default and Anonymous have on a fresh mailbox. Anything else was changed on purpose, so it's exported.
+$defaultRights = @{ 'Calendar|Default' = 'AvailabilityOnly'; 'Calendar|Anonymous' = 'None'; 'Inbox|Default' = 'None'; 'Inbox|Anonymous' = 'None'; 'Contacts|Default' = 'None'; 'Contacts|Anonymous' = 'None' }
+
 # ============================================================ EXPORT
 if ($Export) {
     if (-not $OutputFolder) { $OutputFolder = ".\MailConfig-$tenantName-$(Get-Date -Format 'yyyyMMdd-HHmm')" }
@@ -149,6 +194,9 @@ if ($Export) {
 
     $perm = [System.Collections.Generic.List[object]]::new()
     $fwd  = [System.Collections.Generic.List[object]]::new()
+    $folderPerm = [System.Collections.Generic.List[object]]::new()
+    $checks = [System.Collections.Generic.List[object]]::new()
+    $folderTypes = @('Calendar') + @($IncludeFolders)
     $i = 0
     foreach ($m in $mbx) {
         $i++; Write-Progress -Activity 'Permissions' -Status "$($m.PrimarySmtpAddress)" -PercentComplete (100 * $i / $mbx.Count)
@@ -176,10 +224,70 @@ if ($Export) {
             $kind = if ($accepted -contains $to.Split('@')[-1]) { 'Internal' } else { 'External' }
             $fwd.Add([pscustomobject]@{ Mailbox = $addr; ForwardTo = $to; Kind = $kind; KeepCopy = $m.DeliverToMailboxAndForward })
         }
+
+        # ---- calendar and folder permissions
+        if (-not $SkipFolderPermissions) {
+            foreach ($ft in $folderTypes) {
+                $path = Get-DefaultFolderPath $addr $ft
+                if (-not $path) { continue }
+                foreach ($fp in @(Get-MailboxFolderPermission -Identity "${addr}:$path" -ErrorAction SilentlyContinue)) {
+                    $userText = if ($fp.User.DisplayName) { "$($fp.User.DisplayName)" } else { "$($fp.User)" }
+                    $userType = "$($fp.User.UserType)"
+                    $rights = (@($fp.AccessRights) | ForEach-Object { "$_" }) -join ';'
+                    if ($userType -in 'Default', 'Anonymous' -or $userText -in 'Default', 'Anonymous') {
+                        $who = if ($userType -in 'Default', 'Anonymous') { $userType } else { $userText }
+                        if ($defaultRights["$ft|$who"] -eq $rights) { continue }   # unchanged from a fresh mailbox
+                        $trustee = $who
+                    }
+                    elseif ($userType -eq 'External') { $trustee = "external:$userText" }
+                    else {
+                        $smtp = "$($fp.User.RecipientPrincipal.PrimarySmtpAddress)"
+                        if (-not $smtp) { $smtp = "$($fp.User.ADRecipient.PrimarySmtpAddress)" }
+                        $trustee = if ($smtp) { $smtp.ToLower() } else { Resolve-Smtp $userText }
+                    }
+                    $flags = "$($fp.SharingPermissionFlags)"
+                    $folderPerm.Add([pscustomobject]@{ Mailbox = $addr; Folder = $ft; FolderPath = $path; Trustee = $trustee; AccessRights = $rights
+                            SharingPermissionFlags = $(if ($flags -and $flags -ne 'None') { $flags } else { '' }) })
+                }
+            }
+        }
+
+        # ---- report only: inbox rules and automatic replies, to check after cutover
+        if (-not $SkipMailboxChecks) {
+            $rules = @(Get-InboxRule -Mailbox $addr -ErrorAction SilentlyContinue -WarningAction SilentlyContinue)
+            $forwarding = @($rules | Where-Object { $_.ForwardTo -or $_.ForwardAsAttachmentTo -or $_.RedirectTo })
+            $ar = Get-MailboxAutoReplyConfiguration -Identity $addr -ErrorAction SilentlyContinue
+            $arState = if ($ar) { "$($ar.AutoReplyState)" } else { 'Unknown' }
+            if ($rules.Count -or ($arState -and $arState -ne 'Disabled')) {
+                $what = @()
+                if ($rules.Count) { $what += "$($rules.Count) inbox rule(s): check they arrived and still point at the right people and folders" }
+                if ($forwarding.Count) { $what += "$($forwarding.Count) forward or redirect: check the address, and outbound spam policy" }
+                if ($arState -eq 'Enabled') { $what += 'automatic reply on: check it in the destination' }
+                if ($arState -eq 'Scheduled') { $what += "automatic reply scheduled until $($ar.EndTime)" }
+                $checks.Add([pscustomobject]@{
+                        Mailbox                   = $addr
+                        Type                      = $m.RecipientTypeDetails
+                        InboxRules                = $rules.Count
+                        EnabledRules              = @($rules | Where-Object Enabled).Count
+                        RulesThatForwardOrRedirect = $forwarding.Count
+                        AutoReplyState            = $arState
+                        AutoReplyEnd              = $(if ($arState -eq 'Scheduled') { $ar.EndTime } else { '' })
+                        Check                     = ($what -join '; ')
+                    })
+            }
+        }
     }
     Write-Progress -Activity 'Permissions' -Completed
     $perm | Export-Csv (Join-Path $OutputFolder 'Permissions.csv') -NoTypeInformation -WhatIf:$false
     $fwd  | Export-Csv (Join-Path $OutputFolder 'Forwarding.csv') -NoTypeInformation -WhatIf:$false
+    if (-not $SkipFolderPermissions) {
+        # Written even when empty, so -Import can tell "none" from "not exported".
+        if ($folderPerm.Count) { $folderPerm | Export-Csv (Join-Path $OutputFolder 'FolderPermissions.csv') -NoTypeInformation -WhatIf:$false }
+        else { Set-Content -Path (Join-Path $OutputFolder 'FolderPermissions.csv') -Value '"Mailbox","Folder","FolderPath","Trustee","AccessRights","SharingPermissionFlags"' -WhatIf:$false }
+    }
+    if (-not $SkipMailboxChecks) {
+        $checks | Export-Csv (Join-Path $OutputFolder 'CheckAfterCutover.csv') -NoTypeInformation -WhatIf:$false
+    }
 
     $groups = @(Get-DistributionGroup -ResultSize Unlimited)
     $members = [System.Collections.Generic.List[object]]::new()
@@ -234,6 +342,13 @@ if ($Export) {
     Write-Host ("  {0} permissions, {1} forwards ({2} external), {3} distribution lists with {4} members, {5} dynamic lists, {6} contacts, {7} transport rules" -f
         $perm.Count, $fwd.Count, @($fwd | Where-Object Kind -eq 'External').Count, @($groupRows).Count, $members.Count,
         @(Import-Csv (Join-Path $OutputFolder 'DynamicGroups.csv')).Count, @(Import-Csv (Join-Path $OutputFolder 'MailContacts.csv')).Count, $rules.Count)
+    if (-not $SkipFolderPermissions) {
+        Write-Host ("  {0} folder permissions on {1} ({2} calendar delegates, {3} external)" -f $folderPerm.Count, ($folderTypes -join ', '),
+            @($folderPerm | Where-Object { $_.SharingPermissionFlags -match 'Delegate' }).Count, @($folderPerm | Where-Object Trustee -like 'external:*').Count)
+    }
+    if (-not $SkipMailboxChecks) {
+        Write-Host ("  {0} mailbox(es) with inbox rules or an automatic reply to check after cutover. See CheckAfterCutover.csv" -f $checks.Count)
+    }
     if ($unresolved) { Write-Host "  $unresolved permission(s) point at deleted or unknown accounts (Trustee 'unresolved:'). Import skips them." -ForegroundColor Yellow }
     Write-Host 'The CSVs hold names and addresses. Keep them out of source control and shared drives.' -ForegroundColor Yellow
     return
@@ -375,6 +490,60 @@ if ($Include -contains 'Permissions') {
     }
 }
 
+# ---------------------------------------------------------- calendar and folder permissions
+if ($Include -contains 'FolderPermissions') {
+    Write-Host 'Calendar and folder permissions' -ForegroundColor Cyan
+    $fpFile = Join-Path $ExportFolder 'FolderPermissions.csv'
+    if (-not (Test-Path $fpFile)) {
+        Write-Log 'FolderPermission' $ExportFolder 'Skipped' 'No FolderPermissions.csv. The export was made before 1.2.0 or with -SkipFolderPermissions. Re-run -Export'
+    }
+    else {
+        foreach ($row in @(Import-Csv $fpFile)) {
+            $label = "$($row.Folder): $($row.Trustee) on $($row.Mailbox)"
+            $box = Get-Mapped $row.Mailbox
+            if (-not $box) { Write-Log 'FolderPermission' $label 'Skipped' 'Mailbox not in the mapping'; continue }
+            if ($row.Trustee -like 'external:*') { Write-Log 'FolderPermission' $label 'Skipped' 'Shared with someone outside the organisation. The owner re-shares it from the destination'; continue }
+            if ($row.Trustee -like 'unresolved:*') { Write-Log 'FolderPermission' $label 'Skipped' 'Trustee no longer exists in the source'; continue }
+            $isDefault = $row.Trustee -in 'Default', 'Anonymous'
+            $who = if ($isDefault) { $row.Trustee } else { Get-Mapped $row.Trustee }
+            if (-not $who) { Write-Log 'FolderPermission' $label 'Skipped' 'Trustee not in the mapping'; continue }
+            $path = Get-DefaultFolderPath $box $row.Folder
+            if (-not $path) {
+                if ($WhatIfPreference) { $path = "\$($row.Folder)" }
+                else { Write-Log 'FolderPermission' $label 'Problem' "No $($row.Folder) folder found in $box. Is the mailbox there yet?"; continue }
+            }
+            $fid = "${box}:$path"
+            $rights = @($row.AccessRights -split ';' | Where-Object { $_ })
+            $fp = @{ Identity = $fid; User = $who; AccessRights = $rights; ErrorAction = 'Stop' }
+            # Delegate flags only apply to Editor on a calendar.
+            if ($row.SharingPermissionFlags -and $row.Folder -eq 'Calendar' -and $rights -contains 'Editor') {
+                $fp.SharingPermissionFlags = @($row.SharingPermissionFlags -split '[,;]\s*' | Where-Object { $_ })
+            }
+            if (-not $PSCmdlet.ShouldProcess($fid, "$($rights -join ',') for $who")) { Write-Log 'FolderPermission' $label 'WhatIf' "Would grant $($rights -join ',') to $who on $fid"; continue }
+            try {
+                $existing = $null
+                if (-not $isDefault) {
+                    try { $existing = Get-MailboxFolderPermission -Identity $fid -User $who -ErrorAction Stop } catch { $existing = $null }
+                }
+                if ($isDefault -or $existing) {
+                    $now = if ($existing) { (@($existing.AccessRights) | ForEach-Object { "$_" }) -join ';' } else { '' }
+                    if ($existing -and $now -eq ($rights -join ';')) { Write-Log 'FolderPermission' $label 'Exists' "$who already has $now"; continue }
+                    Set-MailboxFolderPermission @fp | Out-Null
+                    Write-Log 'FolderPermission' $label 'Set' "$who now $($rights -join ',') on $fid"
+                }
+                else {
+                    Add-MailboxFolderPermission @fp | Out-Null
+                    Write-Log 'FolderPermission' $label 'Added' "$who $($rights -join ',') on $fid$(if ($fp.SharingPermissionFlags) { " ($($fp.SharingPermissionFlags -join ', '))" })"
+                }
+            }
+            catch {
+                if ($_.Exception.Message -match 'already|exists') { Write-Log 'FolderPermission' $label 'Exists' '' }
+                else { Write-Log 'FolderPermission' $label 'Problem' $_.Exception.Message }
+            }
+        }
+    }
+}
+
 # ---------------------------------------------------------- forwarding
 if ($Include -contains 'Forwarding') {
     Write-Host 'Forwarding' -ForegroundColor Cyan
@@ -411,3 +580,4 @@ $log | Group-Object Status | Sort-Object Name | ForEach-Object { Write-Host ("{0
 Write-Host "Report: $file" -ForegroundColor Cyan
 if (@($log | Where-Object Status -eq 'Problem').Count) { Write-Host 'Some items failed. Fix them and re-run; anything already done is skipped.' -ForegroundColor Red }
 Write-Host 'Transport rules are not imported. Rebuild them from the New-TransportRule commands in TransportRules.xml, disabled until tested.' -ForegroundColor Yellow
+if (Test-Path (Join-Path $ExportFolder 'CheckAfterCutover.csv')) { Write-Host "After cutover, check inbox rules and automatic replies against $(Join-Path $ExportFolder 'CheckAfterCutover.csv')." -ForegroundColor Yellow }

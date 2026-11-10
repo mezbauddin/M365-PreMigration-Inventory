@@ -5,11 +5,17 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
-| Released | 9 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part of the [docs](README.md) for my [M365 tenant-to-tenant migration toolkit](../README.md).
+
+## Why it matters
+
+The scripts tell you what's in the tenant. They can't tell you that the phones run through Teams, that a flow nobody remembers sends the invoices, or that the licence renews in three weeks.
+
+**Without it:** you quote for mail and files, and spend the week after cutover rebuilding things nobody mentioned, unpaid.
 
 ## How I use it
 
@@ -118,8 +124,96 @@ Where the answer is "I don't know", that's fine. Note who will find out, and by 
 - Are there VIPs, people who travel, or people working unusual hours who need a different plan?
 - Are there external parties (clients, suppliers) who need telling about anything?
 
+## 14. Things copy tools don't move
+
+Each of these is explained, with three ways to handle it, in [What doesn't move](What-Doesnt-Move.md). For every "yes", write down who owns it: they're the person who'll recreate it.
+
+**Teams chats**
+- Do people rely on 1:1 or group chat history? How far back, and for what?
+- Is "chats don't come across" acceptable, or is it a deal breaker that needs a paid tool and a budget?
+- Is there a legal reason to keep chat history? If so, an eDiscovery export from the source before it closes.
+
+**Planner**
+- Which Teams or groups have Planner boards in use? Who owns each?
+- Are any Premium plans (Planner with Project features) in use?
+
+**Forms**
+- Which forms are live and still collecting responses? Who owns them?
+- Is any form linked from the website, an email signature or a printed QR code?
+
+**Power Automate**
+- How many flows are there, and who owns each? (List them from the admin side, not by asking.)
+- Do any flows run as, or belong to, someone who has left?
+- Which flows are business-critical (approvals, invoicing, onboarding)?
+
+**Power Apps**
+- Any canvas or model-driven apps? What data do they use: SharePoint lists, Excel, Dataverse?
+- Do they use premium connectors that need licences in the destination?
+
+**Power BI**
+- Any Power BI workspaces, reports or dashboards in use? Who publishes them?
+- Do the authors still have the original .pbix files? Are there gateways or scheduled refreshes?
+
+**Loop**
+- Are Loop workspaces or Loop pages in use? Which ones matter?
+
+**Recordings**
+- Are meeting recordings or their transcripts needed after the move? Do any have an expiry date set?
+
+**OneNote**
+- Which shared notebooks are in use, and where are they (OneDrive, a site, a Teams tab, only on a laptop)?
+
+**Bookings**
+- Is Microsoft Bookings in use? How many calendars, and is the booking link on the website?
+- Are there future appointments booked through it?
+
+**Phones**
+- Is Teams Phone in use? Calling Plan, Operator Connect or Direct Routing, and who's the operator?
+- How many numbers, auto attendants and call queues? Who records the greetings?
+- What's the operator's lead time for moving numbers?
+
+**Public folders**
+- Are public folders in use? Any mail-enabled ones? Who uses them, and for what?
+
+**Inactive mailboxes**
+- Are there inactive mailboxes in the source (deleted leavers on hold)? Do they need keeping, and for how long?
+
+**Enterprise apps and single sign-on**
+- Which apps do people sign in to with their Microsoft account (SSO)? Who's the admin or vendor contact for each?
+- Do any use automatic user provisioning?
+
+**Sensitivity labels and encryption**
+- Are sensitivity labels in use? Do any of them encrypt?
+- Is encrypted mail (Message Encryption or "Do not forward") used with clients?
+- How much encrypted content is there, and does it need to stay readable after the source closes?
+
+**Rules, auto-replies and signatures**
+- Do people rely on inbox rules, especially ones that forward or file mail?
+- Are signatures managed centrally (a third-party tool or transport rule) or set by each person?
+- Who'll be on holiday over cutover and need an auto-reply on the night?
+
+**Outlook and devices**
+- Will devices be rejoined ([08](../08-Devices/)) or just have Outlook, Office, Teams and OneDrive signed in again?
+- How many people use Outlook desktop with a large mailbox that will need to re-cache?
+
+**Shared calendars**
+- Which shared calendars do teams depend on (rotas, holidays, room or vehicle calendars)?
+- Any internet calendar subscriptions that matter?
+
+**Mobile devices**
+- Are phones enrolled in Intune or under app protection policies in the source?
+- Who helps people re-add their work account and re-register MFA on day one?
+
 ## After the call
 
 - Put every unknown and every "probably" into the [risk register](Risk-Register.md).
+- Turn section 14's answers into the owner-recreates checklist in [What doesn't move](What-Doesnt-Move.md).
 - Use the answers to choose a [copy option](../copy-options/).
-- Draft the [cutover runbook](Cutover-Runbook.md) dates, and check them against section 12.
+- Draft the [cutover runbook](Cutover-Runbook.md) dates, and check them against section 12 and the licensing timeline in the runbook.
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.1.0 | 2026-11-10 | Section 14: discovery questions for everything in What doesn't move |
+| 1.0.0 | 2026-11-09 | First release |

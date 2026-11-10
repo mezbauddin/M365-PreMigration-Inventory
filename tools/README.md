@@ -5,6 +5,8 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
+| Version | 1.0.1 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 | Script | Version | Changes anything? |
@@ -12,7 +14,7 @@
 | [`Test-ModuleHealth.ps1`](Test-ModuleHealth.ps1) | 1.0.0 | No. Only with `-Fix` (installs Graph modules for the current user) |
 | [`Get-MigrationReport.ps1`](Get-MigrationReport.ps1) | 1.0.0 | No. Writes an HTML file with `-Html` |
 
-Part of my [M365 tenant-to-tenant migration toolkit](../README.md).
+Part of my [M365 tenant-to-tenant migration toolkit](../README.md). Where each tool fits in the day-by-day order is in the [cutover runbook](../docs/Cutover-Runbook.md): Test-ModuleHealth at T-14 on the cutover PC, Get-MigrationReport at T-1 and after every step on the night.
 
 ## Test-ModuleHealth
 
@@ -118,7 +120,7 @@ Every toolkit script writes a report: `MailConfig-Import-*`, `SwitchTargetAddres
 
 ### Lessons
 
-- **Tip:** run it after every step on cutover night, not just at the end. A Blocker found at step 4 is cheaper than one found at step 10.
+- **Tip:** run it after every step on cutover night, not just at the end. A Blocker found at the release is cheaper than one found after the address switch.
 - **Trap:** `-WhatIf` runs used to skip writing their reports, so the dry run left no evidence. Every toolkit script now writes its report even under `-WhatIf` (`-WhatIf:$false` on the export), and this tool treats WhatIf rows as fine.
 - **Tip:** attach the HTML to the handover. It's the closest thing to a straight answer when someone asks what didn't move.
 - **Trap:** the HTML holds names and addresses. Treat it like the CSVs.
@@ -127,4 +129,5 @@ Every toolkit script writes a report: `MailConfig-Import-*`, `SwitchTargetAddres
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.1 | 2026-11-10 | README: version and release rows, link to the cutover runbook. Scripts unchanged (both still 1.0.0) |
 | 1.0.0 | 2026-11-10 | First release: Test-ModuleHealth and Get-MigrationReport, from lessons on a live cutover |

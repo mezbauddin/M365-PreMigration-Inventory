@@ -6,26 +6,39 @@
     TL;DR: Run once as a Global Reader (or Global Admin) in the SOURCE tenant. It writes CSV files covering
     users and licences, mailboxes with sizes and archives, mailbox permissions, groups, distribution lists,
     mail contacts, accepted domains, SharePoint sites and OneDrive storage, then prints a summary.
-    Nothing in the tenant is changed.
+    Since 1.1.0 it also lists public folders, inactive mailboxes, room and equipment mailboxes with their booking
+    settings, and the ExchangeGuid, ArchiveGuid and LegacyExchangeDN that Microsoft's native cross-tenant
+    mailbox migration needs on each target mail user. Nothing in the tenant is changed.
 
     Output folder: .\Inventory-<tenant>-<yyyyMMdd-HHmm>\
 
 .PARAMETER SharePointAdminUrl
-    The SharePoint admin URL, with or without https://, for example contoso-admin.sharepoint.com
+    The SharePoint admin URL of the SOURCE tenant, with or without https://, for example
+    fabrikam-admin.sharepoint.com
 
 .PARAMETER SkipMailboxPermissions
     Skip the Full Access and Send As scan (the slowest part on large tenants).
 
 .EXAMPLE
-    .\Invoke-SourceTenantInventory.ps1 -SharePointAdminUrl https://contoso-admin.sharepoint.com
+    .\Invoke-SourceTenantInventory.ps1 -SharePointAdminUrl https://fabrikam-admin.sharepoint.com
+
+.EXAMPLE
+    .\Invoke-SourceTenantInventory.ps1 -SharePointAdminUrl fabrikam-admin.sharepoint.com -SkipMailboxPermissions
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.4
-    Date    : 2026-11-04
+    Version : 1.1.0
+    Date    : 2026-11-10
+    Licence : MIT
+    Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement,
               Microsoft.Online.SharePoint.PowerShell (Windows PowerShell 5.1 for the SPO module)
     Changelog:
+      1.1.0  Adds 12-PublicFolders.csv, 13-MailPublicFolders.csv, 14-InactiveMailboxes.csv and
+             15-ResourceMailboxes.csv (rooms and equipment with capacity and calendar processing). 04-Mailboxes.csv
+             gains ExchangeGuid, ArchiveGuid, LegacyExchangeDN and X500Addresses columns at the end. Summary gains
+             public folder and inactive mailbox counts. Existing files and columns are unchanged.
+      1.0.4  Aliases lists secondary smtp: addresses only (case-sensitive match), not the primary address.
       1.0.3  Fix null ExchangeGuid (not in Get-EXOMailbox's default property set); identity fallback to
              object ID or UPN; per-mailbox errors warn instead of stopping the run.
       1.0.2  Module preflight; SPO module loads via -UseWindowsPowerShell on PS 7; SharePoint section is skipped
@@ -44,7 +57,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Accept "contoso-admin.sharepoint.com" or "https://contoso-admin.sharepoint.com/" and normalise both.
+# Accept "fabrikam-admin.sharepoint.com" or "https://fabrikam-admin.sharepoint.com/" and normalise both.
 $SharePointAdminUrl = 'https://' + ($SharePointAdminUrl.Trim().ToLower() -replace '^https://', '' -replace '/$', '')
 
 function Convert-SizeToBytes {
@@ -140,7 +153,8 @@ $users |
 # ---------------------------------------------------------------- mailboxes
 Write-Step 'Mailboxes and sizes (this can take a few minutes)'
 # ExchangeGuid is not in Get-EXOMailbox's default (Minimum) property set, so request it explicitly.
-$mailboxes = Get-EXOMailbox -ResultSize Unlimited -Properties ExchangeGuid, ArchiveStatus, ArchiveGuid, LitigationHoldEnabled, InPlaceHolds, ForwardingSmtpAddress, ForwardingAddress, DeliverToMailboxAndForward, EmailAddresses
+# LegacyExchangeDN, ExchangeGuid and ArchiveGuid are what native cross-tenant moves stamp on the target mail user.
+$mailboxes = Get-EXOMailbox -ResultSize Unlimited -Properties ExchangeGuid, ArchiveStatus, ArchiveGuid, LegacyExchangeDN, LitigationHoldEnabled, InPlaceHolds, ForwardingSmtpAddress, ForwardingAddress, DeliverToMailboxAndForward, EmailAddresses
 Write-Host ("    {0} mailboxes found" -f @($mailboxes).Count)
 
 function Get-MailboxKey {
@@ -183,6 +197,11 @@ $mbxRows = foreach ($m in $mailboxes) {
         ForwardingAddress     = $m.ForwardingAddress
         LastLogonTime         = if ($stats) { $stats.LastLogonTime } else { $null }
         Aliases               = (($m.EmailAddresses | Where-Object { $_ -clike 'smtp:*' }) -join ';')
+        # New in 1.1.0, kept at the end so anything reading the older columns is unaffected.
+        ExchangeGuid          = "$($m.ExchangeGuid)"
+        ArchiveGuid           = $(if ("$($m.ArchiveGuid)" -and "$($m.ArchiveGuid)" -ne '00000000-0000-0000-0000-000000000000') { "$($m.ArchiveGuid)" } else { '' })
+        LegacyExchangeDN      = $m.LegacyExchangeDN
+        X500Addresses         = (($m.EmailAddresses | Where-Object { "$_" -like 'x500:*' }) -join ';')
     }
 }
 $mbxRows | Sort-Object SizeGB -Descending |
@@ -245,6 +264,94 @@ Get-OrganizationConfig | Select-Object EWSEnabled, @{n = 'EWSAllowList'; e = { $
     Export-Csv (Join-Path $outDir '10-EwsConfig.csv') -NoTypeInformation
 $publicFolderMailboxes = @(Get-Mailbox -PublicFolder -ResultSize Unlimited -ErrorAction SilentlyContinue)
 
+# ---------------------------------------------------------------- public folders
+# No copy tool moves public folders by default, and native cross-tenant migration doesn't move them at all.
+$publicFolders = @()
+$mailPublicFolders = @()
+if ($publicFolderMailboxes.Count) {
+    Write-Step ("Public folders ({0} public folder mailbox(es))" -f $publicFolderMailboxes.Count)
+    try {
+        $publicFolders = @(Get-PublicFolder -Identity '' -Recurse -ResultSize Unlimited -ErrorAction Stop |
+            Where-Object { $_.ParentPath })   # the root (IPM_SUBTREE) has no parent path
+    }
+    catch { Write-Warning "Could not read public folders: $($_.Exception.Message)" }
+    $publicFolders |
+        Select-Object Name, ParentPath, FolderClass, MailEnabled, ContentMailboxName, HasSubfolders |
+        Export-Csv (Join-Path $outDir '12-PublicFolders.csv') -NoTypeInformation
+    try { $mailPublicFolders = @(Get-MailPublicFolder -ResultSize Unlimited -ErrorAction Stop) }
+    catch { Write-Warning "Could not read mail-enabled public folders: $($_.Exception.Message)" }
+    $mailPublicFolders |
+        Select-Object DisplayName, PrimarySmtpAddress, Alias, HiddenFromAddressListsEnabled,
+            @{n = 'Aliases'; e = { ($_.EmailAddresses | Where-Object { $_ -clike 'smtp:*' }) -join ';' } } |
+        Export-Csv (Join-Path $outDir '13-MailPublicFolders.csv') -NoTypeInformation
+}
+else {
+    Write-Step 'Public folders: none (no public folder mailboxes)'
+}
+
+# ---------------------------------------------------------------- inactive mailboxes
+# Mailboxes of deleted users kept by a hold. They don't show in Get-EXOMailbox, they don't move, and they matter at decommission.
+Write-Step 'Inactive mailboxes'
+$inactive = @()
+try { $inactive = @(Get-Mailbox -InactiveMailboxOnly -ResultSize Unlimited -ErrorAction Stop) }
+catch { Write-Warning "Could not read inactive mailboxes: $($_.Exception.Message)" }
+$inactive |
+    Select-Object DisplayName, PrimarySmtpAddress, RecipientTypeDetails, WhenSoftDeleted, LitigationHoldEnabled,
+        @{n = 'InPlaceHolds'; e = { $_.InPlaceHolds -join ';' } }, ArchiveStatus,
+        @{n = 'ExchangeGuid'; e = { "$($_.ExchangeGuid)" } } |
+    Export-Csv (Join-Path $outDir '14-InactiveMailboxes.csv') -NoTypeInformation
+
+# ---------------------------------------------------------------- room and equipment mailboxes
+# 02-TargetMailboxes\New-TargetResourceMailboxes.ps1 reads this file to rebuild them with the same booking rules.
+Write-Step 'Room and equipment mailboxes, with calendar processing'
+$recipientCache = @{}
+function Resolve-RecipientSmtp {
+    # Calendar processing returns delegates and policies as names or legacy DNs. Turn each into an SMTP address.
+    param([object]$Id)
+    if (-not $Id) { return $null }
+    $k = "$Id"
+    if ($recipientCache.ContainsKey($k)) { return $recipientCache[$k] }
+    $r = Get-EXORecipient -Identity $k -ErrorAction SilentlyContinue
+    $recipientCache[$k] = if ($r) { "$($r.PrimarySmtpAddress)".ToLower() } else { "unresolved:$k" }
+    return $recipientCache[$k]
+}
+$resourceRows = foreach ($m in @($mailboxes | Where-Object { $_.RecipientTypeDetails -in 'RoomMailbox', 'EquipmentMailbox' })) {
+    $key = Get-MailboxKey $m
+    try {
+        $full = Get-Mailbox -Identity $key -ErrorAction Stop
+        $cp = Get-CalendarProcessing -Identity $key -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Could not read booking settings for $($m.PrimarySmtpAddress): $($_.Exception.Message)"
+        continue
+    }
+    [pscustomobject]@{
+        DisplayName                    = $m.DisplayName
+        PrimarySmtpAddress             = "$($m.PrimarySmtpAddress)".ToLower()
+        Alias                          = $full.Alias
+        RecipientTypeDetails           = $m.RecipientTypeDetails
+        ResourceCapacity               = $full.ResourceCapacity
+        Office                         = $full.Office
+        HiddenFromAddressListsEnabled  = $full.HiddenFromAddressListsEnabled
+        AutomateProcessing             = $cp.AutomateProcessing
+        BookingWindowInDays            = $cp.BookingWindowInDays
+        MaximumDurationInMinutes       = $cp.MaximumDurationInMinutes
+        AllowConflicts                 = $cp.AllowConflicts
+        AllowRecurringMeetings         = $cp.AllowRecurringMeetings
+        AllBookInPolicy                = $cp.AllBookInPolicy
+        AllRequestInPolicy             = $cp.AllRequestInPolicy
+        BookInPolicy                   = (@($cp.BookInPolicy | ForEach-Object { Resolve-RecipientSmtp $_ }) -join ';')
+        RequestInPolicy                = (@($cp.RequestInPolicy | ForEach-Object { Resolve-RecipientSmtp $_ }) -join ';')
+        ResourceDelegates              = (@($cp.ResourceDelegates | ForEach-Object { Resolve-RecipientSmtp $_ }) -join ';')
+        AddOrganizerToSubject          = $cp.AddOrganizerToSubject
+        DeleteSubject                  = $cp.DeleteSubject
+        DeleteComments                 = $cp.DeleteComments
+        RemovePrivateProperty          = $cp.RemovePrivateProperty
+        ProcessExternalMeetingMessages = $cp.ProcessExternalMeetingMessages
+    }
+}
+@($resourceRows) | Export-Csv (Join-Path $outDir '15-ResourceMailboxes.csv') -NoTypeInformation
+
 # ---------------------------------------------------------------- SharePoint and OneDrive
 $siteRows = @()
 if ($spoAvailable) {
@@ -280,6 +387,10 @@ $summary = [ordered]@{
     SharePointTotalGB      = [math]::Round(($siteRows | Where-Object { -not $_.IsOneDrive } | Measure-Object StorageGB -Sum).Sum, 2)
     OneDriveAccounts       = @($siteRows | Where-Object IsOneDrive).Count
     OneDriveTotalGB        = [math]::Round(($siteRows | Where-Object IsOneDrive | Measure-Object StorageGB -Sum).Sum, 2)
+    # New in 1.1.0, appended so the existing columns keep their order.
+    PublicFolders          = $publicFolders.Count
+    MailPublicFolders      = $mailPublicFolders.Count
+    InactiveMailboxes      = $inactive.Count
 }
 [pscustomobject]$summary | Export-Csv (Join-Path $outDir '00-Summary.csv') -NoTypeInformation
 [pscustomobject]$summary | Format-List

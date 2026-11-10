@@ -96,12 +96,13 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.1.0
+    Version : 2.1.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Authentication, Microsoft.Graph.Users,
               Microsoft.Graph.Identity.DirectoryManagement. Run -Apply as a Global Admin of the DESTINATION.
+    Room, equipment and scheduling mailboxes are left out of the plan: New-TargetResourceMailboxes.ps1 builds them.
     The passwords file written by -Apply is sensitive. Move it somewhere secure and delete the local copy.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Plan')]
@@ -187,7 +188,7 @@ if ($Plan) {
                 else { $kind = 'User' }
             }
             '^(RoomMailbox|EquipmentMailbox|SchedulingMailbox)$' {
-                $kind = 'Shared'; $include = $false; $note = "$($m.RecipientTypeDetails): build by hand, can't be converted"
+                $kind = 'Shared'; $include = $false; $note = "$($m.RecipientTypeDetails): built by New-TargetResourceMailboxes.ps1, can't be converted"
             }
             default { $kind = 'Shared' }
         }

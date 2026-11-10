@@ -6,7 +6,7 @@
 .DESCRIPTION
     TL;DR: A domain can only live in one tenant. Before the destination can verify it, the source has to let go.
     This script:
-      1. Snapshots every recipient (addresses and LegacyExchangeDN) to SourceRecipients-pre-<date>.csv. The
+      1. Snapshots every recipient (addresses and LegacyExchangeDN) to SourceRecipients-pre-<stamp>.csv. The
          destination needs that file to add X500 addresses, so replies to old mail keep working.
       2. Lists every blocker, in -WhatIf and -BlockersOnly runs too: deleted users in the recycle bin, synced users,
          app registrations with identifier URIs on the domain (Application), Entra users with proxy addresses on the
@@ -26,6 +26,8 @@
     -Verify straight away. Mail to the domain bounces from the moment its addresses are stripped here until the
     destination verifies it.
 
+    Snapshot timing: -SnapshotOnly at T-1 day (Test-CutoverReadiness reads it) and again on the night just before
+    the release. That night's -pre file is the one Switch-TargetAddresses uses. -BlockersOnly writes no snapshot.
     Tip: run -BlockersOnly a few days before. Every blocker it shows is one you don't want to meet at 9pm.
     Trap: a snapshot taken after the addresses are stripped is useless for X500s. Keep the -pre file safe.
     Paid tool: some migration suites have a domain move feature that does this and the destination side together.
@@ -72,7 +74,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.1.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit

@@ -42,16 +42,17 @@
     The mapping CSV (Source, Destination).
 
 .PARAMETER SourceSnapshot
-    The SourceRecipients-pre-<date>.csv from Remove-SourceDomain -SnapshotOnly.
+    The SourceRecipients-pre-<stamp>.csv from Remove-SourceDomain -SnapshotOnly. Take the snapshot first: at T-1 day
+    for the go/no-go, and again on the night for the final run just before the release.
 
 .EXAMPLE
     .\Test-CutoverReadiness.ps1 -SourceTenantId <source-guid> -DestinationTenantId <destination-guid> `
         -SourceAdmin admin@fabrikam.onmicrosoft.com -DestinationAdmin admin@contoso.onmicrosoft.com `
-        -Domain fabrikam.com -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-20261110-1800.csv
+        -Domain fabrikam.com -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit

@@ -26,7 +26,7 @@
     Plus:
       Mapping       Plan rows that aren't in the mapping file
       ListMembers   With -MailConfigFolder: member count of each distribution list against the 05 export
-      CA-Location   Conditional Access policies with a location condition. Your own test sign-in from abroad (or
+      CA-Location   Conditional Access policies with a location condition. Your own test sign-in from another country (or
                     through a VPN) can be blocked with error 53003, which looks like a broken migration
       MFA           No Conditional Access policy requires MFA for all users and security defaults are off. A
                     finding to report, not something this script changes
@@ -55,7 +55,8 @@
     cutover.
 
 .PARAMETER SourceSnapshot
-    SourceRecipients-<date>.csv from Remove-SourceDomain (part 7). Turns on the X500 check.
+    SourceRecipients-pre-<stamp>.csv from Remove-SourceDomain (part 7): the night's -pre file, the same one
+    Switch-TargetAddresses used. Turns on the X500 check.
 
 .PARAMETER Tolerance
     How far below the source item count, in percent, still passes. Default 5.
@@ -74,20 +75,20 @@
     Leave out the tenant-wide Conditional Access and MFA checks.
 
 .EXAMPLE
-    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -InventoryFolder .\Inventory-fabrikam-20261110-0900 -MappingFile .\UserMapping.csv
+    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -InventoryFolder .\Inventory-fabrikam-<date> -MappingFile .\UserMapping.csv
 
 .EXAMPLE
-    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -InventoryFolder .\Inventory-fabrikam-20261110-0900 -MappingFile .\UserMapping.csv `
-        -Domain fabrikam.com -SourceSnapshot .\SourceRecipients-20261110-1800.csv -MailConfigFolder .\MailConfig-fabrikam.com-20261109-1100 `
+    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -InventoryFolder .\Inventory-fabrikam-<date> -MappingFile .\UserMapping.csv `
+        -Domain fabrikam.com -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -MailConfigFolder .\MailConfig-fabrikam.com-<date> `
         -SharePointAdminUrl https://contoso-admin.sharepoint.com
 
 .EXAMPLE
-    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -AdminUpn admin@contoso.com -InventoryFolder .\Inventory-fabrikam-20261110-0900 `
-        -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate 2026-11-10
+    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -AdminUpn admin@contoso.com -InventoryFolder .\Inventory-fabrikam-<date> `
+        -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate <yyyy-mm-dd>
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.1.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit

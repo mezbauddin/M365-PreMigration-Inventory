@@ -57,13 +57,14 @@
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
     Version : 2.0.2
-    Date    : 2026-11-08
+    Date    : 2026-11-09
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x (3.7.2 or later recommended, for -DisableWAM). For the consent check:
               Microsoft.Graph.Authentication and Microsoft.Graph.Applications. Read-only without -Fix. -Fix needs
               Exchange Administrator in each tenant; the consent check needs Application.Read.All.
     Changelog:
+      2.0.2  The findings CSV is written under -WhatIf too (Export-Csv -WhatIf:$false), so a dry run leaves a report.
       2.0.1  Missing full_access_as_app is a Warning (delegated tools don't need it). Paged role lookup. Timing and wording per Microsoft's guidance.
       2.0.0  Checks source and destination in one run, with a sign-in for each and a guard against the wrong tenant.
       1.0.4  Clears legacy rules by setting the policy to null, which removes both lists.

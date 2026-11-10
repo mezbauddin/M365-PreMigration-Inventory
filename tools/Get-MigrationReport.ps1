@@ -20,6 +20,9 @@
       ClearDeletedUserDomain-*.csv   07 Clear-DeletedUserDomain
       TargetDomainDns-*.csv          07 Add-TargetDomain (the records to publish, shown in full)
       CutoverReadiness-*.csv         07 Test-CutoverReadiness
+      TargetResourceMailboxes-*.csv  02 New-TargetResourceMailboxes
+      DecommissionReadiness-*.csv    10 Get-DecommissionReadiness
+      TargetMailUsers-Report-*.csv   A New-TargetMailUsers
       BlockSourceSignIn-*.csv        07 Block-SourceSignIn
       SetDomainDnsRecords-*.csv      07 Set-DomainDnsRecords
       DriveCopy-ShareGate-*.csv      copy-options B Copy-DrivesWithShareGate
@@ -54,7 +57,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -86,13 +89,16 @@ $known = [ordered]@{
     'CutoverReadiness'       = '07 Test-CutoverReadiness'
     'BlockSourceSignIn'      = '07 Block-SourceSignIn'
     'SetDomainDnsRecords'    = '07 Set-DomainDnsRecords'
+    'TargetResourceMailboxes' = '02 New-TargetResourceMailboxes'
+    'DecommissionReadiness'  = '10 Get-DecommissionReadiness'
+    'TargetMailUsers-Report' = 'A New-TargetMailUsers'
     'DriveCopy-ShareGate'    = 'B Copy-DrivesWithShareGate'
     'DriveCopy-Download'     = 'C Copy-DriveViaGraph -Download'
     'DriveCopy-Upload'       = 'C Copy-DriveViaGraph -Upload'
     'DriveCopyList'          = 'New-DriveCopyList'
     'Validation'             = '09 Test-TargetTenant'
 }
-$okValues = 'Done', 'Exists', 'OK', 'WhatIf', 'Successful', 'Success', 'Pass', 'Created', 'Added', 'Set', 'Already existed', 'Removed', 'Requested', 'Copy', 'Completed',
+$okValues = 'Done', 'Skip', 'SKIP', 'Info', 'INFO', 'Exists', 'OK', 'WhatIf', 'Successful', 'Success', 'Pass', 'Created', 'Added', 'Set', 'Already existed', 'Removed', 'Requested', 'Copy', 'Completed',
              'Info', 'Unchanged', 'Blocked', 'AlreadyBlocked'
 $preferred = 'Object', 'Source', 'User', 'Name', 'Identity', 'Address', 'PrimarySmtpAddress', 'Domain', 'Area', 'Check', 'Action',
              'Type', 'Stage', 'Status', 'Result', 'Expected', 'Actual', 'Value', 'Destination', 'DestinationSite', 'DestinationFolder',

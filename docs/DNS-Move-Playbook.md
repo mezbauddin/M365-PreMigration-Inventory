@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -47,8 +47,8 @@ At **T-14**, confirm who can log in to the DNS host (`Resolve-DnsName fabrikam.c
 
 # 4. Recreate it at the new provider (preview, then for real). Keys come from environment variables or a prompt
 # (set $env:GODADDY_KEY and $env:GODADDY_SECRET first, or let the script prompt; the secret is hidden)
-.\Set-DomainDnsRecords.ps1 -Domain fabrikam.com -Provider GoDaddy -FromScan .\DomainDns-FullScan-<date>.csv -WhatIf
-.\Set-DomainDnsRecords.ps1 -Domain fabrikam.com -Provider GoDaddy -FromScan .\DomainDns-FullScan-<date>.csv
+.\Set-DomainDnsRecords.ps1 -Domain fabrikam.com -Provider <GoDaddy or Cloudflare> -FromScan .\DomainDns-FullScan-<stamp>.csv -WhatIf
+.\Set-DomainDnsRecords.ps1 -Domain fabrikam.com -Provider <GoDaddy or Cloudflare> -FromScan .\DomainDns-FullScan-<stamp>.csv
 
 # 5. Before switching NS: ask the new name servers directly
 Resolve-DnsName fabrikam.com -Type MX -Server <new-ns-1>
@@ -83,4 +83,5 @@ Change the name servers at the registrar back to the old list from step 7. The o
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.1 | 2026-11-10 | Examples name either provider. Timing matches the cutover runbook (full scan and NS move at T-14) |
 | 1.0.0 | 2026-11-10 | First version, from moving DNS off an inaccessible host two days before a live cutover |

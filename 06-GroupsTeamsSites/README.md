@@ -6,10 +6,10 @@
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
 | Version | 1.1.0 |
-| Released | 9 November 2026 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
-Part 6 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run the export any time. Run the import once the destination mailboxes exist ([02](../02-TargetMailboxes/)) and before you start copying Teams or SharePoint.
+Part 6 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run the export any time. Run the import once the destination mailboxes exist ([02](../02-TargetMailboxes/)) and before you start copying Teams or SharePoint: T-14 in the [cutover runbook](../docs/Cutover-Runbook.md).
 
 ## Why you need this
 
@@ -93,17 +93,26 @@ The CSVs contain names and addresses. Keep them out of source control and shared
 - **Teams can take a moment.** Graph sometimes can't see a brand-new group straight away. The script retries a few times. If it still fails, the group is fine; re-run later and it'll only do the Teams part.
 - **Welcome messages are off for a reason.** Otherwise every member gets a 'you've been added to' email from a tenant they haven't started using yet, weeks before cutover.
 
+## Tips and traps
+
+- **Tip:** run the export early, during discovery. `Groups.csv` and `Sites.csv` with sizes are the best scoping document you'll get for the collaboration side.
+- **Tip:** choose `-AddressDomain` as a domain the destination already owns. The moving domain is added to each group by Switch-TargetAddresses at cutover, through the `T2T:` tag.
+- **Trap:** Planner plans, Forms, Loop components and channel meeting recordings don't come with the group. See [What doesn't move](../docs/What-Doesnt-Move.md) before you promise a Team will arrive "as it was".
+- **Trap:** visibility and hidden-from-address-book come across; other group settings, such as whether people outside the company can email the group, don't. Check those after import if they matter.
+- **Trap:** if your mapping file is missing someone, they're skipped as a member and listed in the report. Re-run after fixing the mapping; it only adds what's missing.
+
 ## Three ways to do it
 
 | Route | How |
 | --- | --- |
 | Paid tool | ShareGate can create the Team for you while copying, but the address and site URL are its choice, and a name clash gives you a "2" on the end. Create the groups with this script, then use "copy channels into an existing team" |
 | Microsoft's own | Teams admin centre or `New-UnifiedGroup` and `New-Team` by hand, then add owners and members. Native cross-tenant migration doesn't move shared Teams content at all |
-| By hand | Create each Team in the Teams client with the right name, then add members. Fine for four Teams. Check the email address it was given before you copy anything into it |
+| By hand | Create each Team in the Teams client with the right name, then add members. Fine for a handful of Teams. Check the email address it was given before you copy anything into it |
 
 ## Changelog
 
 | Version | Date | Change |
 | --- | --- | --- |
+| README | 2026-11-10 | Tips and traps, runbook timing, link to What doesn't move. Script unchanged at 1.1.0 |
 | 1.1.0 | 2026-11-10 | `-AdminUpn`: disconnects Exchange Online and Graph sessions for any other account or tenant, signs in as the one named, prints who and where |
 | 1.0.0 | 2026-11-09 | First release |

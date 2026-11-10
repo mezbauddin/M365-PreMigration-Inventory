@@ -5,24 +5,35 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
+| Version | 1.2.0 |
 | Licence | MIT |
-| Came from | A real small-business migration: about 40 mailboxes, 1.7 TB of mail and archives, SharePoint, Teams, OneDrive and three domains |
+| Came from | A real small-business migration: mailboxes with large archives, SharePoint, Teams, OneDrive and more than one domain |
+
+## Why this exists
+
+Tenant-to-tenant moves fail in the gaps between tools: the copy tool moves the data, but nobody owns the domain release, the X500 addresses, the DNS host nobody can log in to, or the order it all has to happen in. This toolkit covers those gaps, in order, with a check before every point of no return.
+
+**Without it:** mail bounces for hours on the night, replies to old messages bounce for weeks, and the first sign of a missed step is a phone call from the business owner.
 
 ## The journey
 
 ```mermaid
 flowchart LR
-    D[Discover<br/>01] --> B[Build destination<br/>02 · 04]
-    B --> C{Copy data<br/>copy-options}
+    D[Discover<br/>01] --> B[Build destination<br/>02 · 02b mapping]
+    B --> E[EWS archive readiness<br/>03, if EWS]
+    E --> C{Copy data<br/>copy-options}
+    B --> C
     C --> A[Microsoft native]
     C --> S[ShareGate]
     C --> N[No budget]
     A & S & N --> M[Rebuild config<br/>05 · 06]
-    M --> X[Cut over domain<br/>07]
+    M --> X[Cut over domain<br/>07 · 02 -Apply · 04]
     X --> V[Validate<br/>09]
     X --> DV[Rejoin devices<br/>08]
     V --> R[Decommission source<br/>10]
-    T[Tools: module health,<br/>migration report] -.-> B & M & X & V
+    DV --> R
+    T[tools: module health,<br/>migration report] -.-> B & M & X & V
+    RB[docs: cutover runbook,<br/>the canonical order] -.-> X
 ```
 
 | Phase | Part | What it does | Changes anything? |
@@ -37,37 +48,47 @@ flowchart LR
 | Rebuild | [06 Groups, Teams and sites](06-GroupsTeamsSites/) | Every Microsoft 365 group, Team and SharePoint site exported. Groups created in the destination on your domain, with owners and members, before the copy | Destination on import. `-WhatIf` |
 | Copy | [New-DriveCopyList](copy-options/#building-the-onedrive-copy-list-new-drivecopylistps1) | Builds the OneDrive copy list for B and C: leavers into one folder each in an archive library, staff into their new OneDrive, archived OneDrives marked Skip. Creates the folders with `-CreateFolders` | Only with `-CreateFolders` |
 | Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, add in destination first, release from source, verify, old addresses with X500s, sign-in names, temporary passwords. Plus `Test-CutoverReadiness` (go/no-go), `Export-DomainDns -FullScan` and `Set-DomainDnsRecords` (moving DNS hosting), `Add-TargetDomain -WaitForDns`, and `Block-SourceSignIn` | Both tenants, in order. `-WhatIf` |
-| Cut over | [08 Devices](08-Devices/) | Planned. Rejoin Entra-joined laptops to the destination: back up the profile, leave, join, Intune, sign the apps back in | n/a yet |
+| Cut over | [08 Devices](08-Devices/) | Rejoin Entra-joined laptops to the destination: back up the profile, leave, join, Intune, sign the apps back in. [`Get-DeviceInventory`](08-Devices/Get-DeviceInventory.ps1) lists what you'll touch; [`Export-BitLockerKeys`](08-Devices/Export-BitLockerKeys.ps1) saves recovery keys before anything leaves the source | Read-only scripts. The rejoin is by hand |
 | Validate | [09 Validation](09-Validation/) | Checks the destination against the inventory, plan and mapping: types, licences, archives, item counts, addresses, X500s, OneDrives, list members, the password-change flag, and Conditional Access that will block your test sign-in. Pass, warn and fail report | No |
-| Decommission | [10 Decommission](10-Decommission/) | Planned. Block source sign-in, final incrementals, export and retain, unlicensed OneDrives, remove licences, close the tenant | n/a yet |
+| Decommission | [10 Decommission](10-Decommission/) | Block source sign-in, final incrementals, export and retain, unlicensed OneDrives, remove licences, close the tenant. [`Get-DecommissionReadiness`](10-Decommission/Get-DecommissionReadiness.ps1) tells you what still stops you | Read-only script. The closing steps are deliberate and by hand |
 | Any time | [tools](tools/) | `Test-ModuleHealth` finds the Graph module version clash before it stops a script. `Get-MigrationReport` reads every report CSV and shows what still needs a look, on screen or as one HTML page | No (`-Fix` installs modules) |
-| Plan and run | [docs](docs/) | [Discovery questionnaire](docs/Discovery-Questionnaire.md), [cutover runbook](docs/Cutover-Runbook.md), [comms templates](docs/Comms-Templates.md), [risk register](docs/Risk-Register.md), [handover template](docs/Handover-Template.md), [DNS move playbook](docs/DNS-Move-Playbook.md), [lessons learnt](docs/Lessons-Learnt.md) | No |
+| Plan and run | [docs](docs/) | [Discovery questionnaire](docs/Discovery-Questionnaire.md), [cutover runbook](docs/Cutover-Runbook.md), [comms templates](docs/Comms-Templates.md), [risk register](docs/Risk-Register.md), [handover template](docs/Handover-Template.md), [DNS move playbook](docs/DNS-Move-Playbook.md), [what doesn't move](docs/What-Doesnt-Move.md), [lessons learnt](docs/Lessons-Learnt.md) | No |
 
-**08** device rejoin and **10** source decommissioning are written up as plans; their scripts come as the live migration moves on.
+The [cutover runbook](docs/Cutover-Runbook.md) is the one canonical order for all of this. The part READMEs follow it.
 
 ## Lessons from a live cutover
 
-The domain moved on 10 November 2026. It worked, and it taught me things no lab did: the DNS host wasn't the registrar and nobody could log in to it, guests in the destination were holding the old addresses, a Graph module version clash stopped a script half way, a Conditional Access policy blocked my own test sign-in from abroad, and the user mapping had to be rebuilt after cutover. Every one of those is now handled by a script or a check. Read [docs/Lessons-Learnt.md](docs/Lessons-Learnt.md) before you set a date.
+The domain moved recently. It worked, and it taught me things no lab did: the DNS host wasn't the registrar and nobody could log in to it, guests in the destination were holding the old addresses, a Graph module version clash stopped a script half way, a Conditional Access policy blocked my own test sign-in from another country, and the user mapping had to be rebuilt after cutover. Every one of those is now handled by a script or a check. Read [docs/Lessons-Learnt.md](docs/Lessons-Learnt.md) before you set a date.
 
 ## Read this first
 
 1. [Copy options](copy-options/), to decide how the data will move. It changes how you build the destination.
 2. [01 Source inventory](01-SourceInventory/) and the [discovery questionnaire](docs/Discovery-Questionnaire.md), to see what you're dealing with.
-3. [07 Domain cutover](07-DomainCutover/) and the [cutover runbook](docs/Cutover-Runbook.md), so you know what cutover night looks like before you set a date.
-4. [Lessons learnt](docs/Lessons-Learnt.md), and run [tools/Test-ModuleHealth.ps1](tools/) on the PC you'll use.
+3. The [cutover runbook](docs/Cutover-Runbook.md), the canonical order, and [07 Domain cutover](07-DomainCutover/), so you know what cutover night looks like before you set a date.
+4. [What doesn't move](docs/What-Doesnt-Move.md), so the business knows what it will rebuild itself.
+5. [Lessons learnt](docs/Lessons-Learnt.md), and run [tools/Test-ModuleHealth.ps1](tools/) on the PC you'll use.
 
 ## How the parts fit together
+
+The short version. The day-by-day version, with every flag, is the [cutover runbook](docs/Cutover-Runbook.md).
 
 1. Run **01** against the source. It writes `Inventory-<tenant>-<date>\` with `04-Mailboxes.csv` and the rest.
 2. Choose your copy option. For **Microsoft native**, read its identity note first: it needs mail users in the destination, not mailboxes.
 3. Run **02 -Plan** in the same folder, review `TargetBuildPlan.csv`, then **02 -Apply -StageOnly** against the destination.
-4. If your tool copies archives over EWS (ShareGate does), run **03** with its app ID and both tenant IDs **before** the mail copy. Then start copying.
-5. Once people are licensed, run **04** so their OneDrives exist. Copy OneDrive after cutover, once sign-in names are final, from the list **New-DriveCopyList** builds.
-6. Run **05 -Export** against the source and **05 -Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
+4. Run **02b** to match every source recipient to its destination. It writes the mapping CSV and a ShareGate `.sgum`. Check its review list line by line.
+5. If your tool copies archives over EWS (ShareGate does), run **03** with its app ID and both tenant IDs **before** the mail copy. Then start copying, outside hours.
+6. At T-14, run **07 Export-DomainDns -FullScan**. If you can't log in to the DNS host, move DNS hosting now with **Set-DomainDnsRecords**: the name server change needs 48 hours.
 7. Before copying Teams or SharePoint, run **06 -Export** and **06 -Import**, so the groups exist on the right domain with their members. Then copy into them.
-8. The day before, run **07 Test-CutoverReadiness**. On cutover night, follow **07** in order: add the domain to the destination and publish its TXT, snapshot, release from the source, verify, switch addresses.
-9. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover, with the HTML from **tools/Get-MigrationReport**.
-10. The day after, **07 Block-SourceSignIn**, then rebuild the mapping with **02b** before any incremental.
+8. Run **05 -Export** against the source and **05 -Import** against the destination, so shared mailboxes, lists and forwarding work on day one. When licences arrive, **02 -Apply -SharedMailboxesOnly**.
+9. At T-7, **07 Remove-SourceDomain -BlockersOnly** and clear what it finds.
+10. The day before (T-1), take the `-pre` snapshot with **07 Remove-SourceDomain -SnapshotOnly**, then run **07 Test-CutoverReadiness** with it. On the night, take a fresh snapshot and do a final readiness run just before the rollback point.
+11. On cutover night, follow the runbook: add the domain to the destination and publish its TXT, snapshot, readiness, release with `-FixApplications`, verify, **02 -Apply** to license and convert, **Switch-TargetAddresses**, then **04** so the OneDrives exist.
+12. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover, with the HTML from **tools/Get-MigrationReport**.
+13. The day after, **07 Block-SourceSignIn**, then rebuild the mapping with **02b** before any incremental. Copy OneDrive from the list **New-DriveCopyList** builds, now sign-in names are final.
+14. Rejoin devices with **08**, and work through the owner-recreates list in [What doesn't move](docs/What-Doesnt-Move.md).
+15. When the business signs off, close the source with **10**, never before the final incrementals or the licence overlap ends.
+
+**tools** runs alongside all of it: **Test-ModuleHealth** before you start and on the cutover PC, **Get-MigrationReport** after every step on the night.
 
 One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 06, 07, 09, and the user mapping in whichever copy tool you use. Build it with [02b](02b-UserMapping/) after 02, and again after cutover, because sign-in names change.
 
@@ -81,7 +102,7 @@ One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 0
 
 **The output is sensitive.** The CSVs hold names, addresses, permissions and, from some steps, temporary passwords. The `.gitignore` keeps them out of commits. Keep them out of email and shared drives too.
 
-**What this doesn't move:** Teams chats, Planner, Power Platform, Intune policies, Conditional Access and other tenant settings. Rebuild those deliberately; don't copy a mess.
+**What this doesn't move:** Teams chats, Planner, Forms, Power Platform, Bookings, Teams Phone, Intune policies, Conditional Access and other tenant settings. Rebuild those deliberately; don't copy a mess. [What doesn't move](docs/What-Doesnt-Move.md) lists each one, with the owner-recreates checklist and three ways to handle it.
 
 ## Disclosure
 
@@ -90,3 +111,11 @@ Not sponsored by anyone. Where I name a product, it's because I used it on the j
 ## Older links
 
 This repo used to be called M365-PreMigration-Inventory. GitHub redirects the old URL here. The inventory script now lives in [01-SourceInventory](01-SourceInventory/).
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.2.0 | 2026-11-10 | Diagram and "How the parts fit" include 02b, 03, 08, 10 and tools. Points at the cutover runbook as the canonical order. Readiness at T-1 plus a final run on the night. What doesn't move added |
+| 1.1.0 | 2026-11-10 | Lessons from a live cutover, tools, 07 readiness and DNS scripts |
+| 1.0.0 | 2026-11-09 | First release |

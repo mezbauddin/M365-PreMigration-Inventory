@@ -5,9 +5,39 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Status | B used in production on a live migration. A being lab-tested. C written up from standard practice |
+| Version | 2.0.0 |
+| Status | B used in production on a live migration. A is a full command list from Microsoft's documentation, not yet lab-verified. C written up from Microsoft's documentation and standard practice |
+| Licence | MIT |
 
 Part of my [M365 tenant-to-tenant migration toolkit](../README.md).
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 2.0.0 | 2026-11-10 | A gets a pasteable command list and `New-TargetMailUsers.ps1`. C gets the full PST path and `New-PstImportMapping.ps1`. Adds the scripts table, what happens without a choice, and version tables on every option |
+| 1.1.0 | 2026-11-10 | `New-DriveCopyList.ps1` 1.0.0, shared by B and C |
+| 1.0.0 | 2026-11-09 | First version: three options and a comparison |
+
+## Scripts in this folder
+
+| Script | Version | Option | Changes anything? |
+| --- | --- | --- | --- |
+| [`New-DriveCopyList.ps1`](New-DriveCopyList.ps1) | 1.0.0 | B and C | Only with `-CreateFolders` (destination folders). `-WhatIf` |
+| [`A-Microsoft-native/New-TargetMailUsers.ps1`](A-Microsoft-native/New-TargetMailUsers.ps1) | 1.0.0 | A | Destination: creates and stamps mail users. `-WhatIf`. Never licenses |
+| [`B-ShareGate/Copy-DrivesWithShareGate.ps1`](B-ShareGate/Copy-DrivesWithShareGate.ps1) | 1.1.0 | B | Destination: copies OneDrives. `-WhatIf` pre-check |
+| [`C-No-budget/New-PstImportMapping.ps1`](C-No-budget/New-PstImportMapping.ps1) | 1.0.0 | C | No. Reads local PSTs, writes CSVs |
+| [`C-No-budget/Copy-DriveViaGraph.ps1`](C-No-budget/Copy-DriveViaGraph.ps1) | 1.1.0 | C | Destination on `-Upload`. `-WhatIf` |
+
+## Why choose deliberately
+
+The copy method decides how the destination has to be built. ShareGate and the no-budget route copy into ordinary mailboxes, built by [02](../02-TargetMailboxes/). Microsoft's native route moves into stamped mail users and fails if a mailbox is already there. Pick late, and you may have to tear down what you built.
+
+## What happens without a choice
+
+- **The wrong destination objects.** Run 02 and 04 for everyone, then decide on native, and every person with a mailbox or OneDrive already in the destination fails their native move until you remove it.
+- **EWS surprises.** Choose a tool that copies archives over EWS without knowing it, and archives fail until [03](../03-EwsArchiveReadiness/) is run in both tenants. After 1 April 2027 they won't work at all.
+- **Budget arguments at the worst moment.** The native add-on and tool subscriptions take time to buy. Discovering you need one the week of cutover moves the date.
 
 ## The short version
 
@@ -32,13 +62,15 @@ Microsoft's add-on prices change, so check the current list before quoting. At t
 3. **Do versions, authors and permissions matter?** If yes, rule out C for anything beyond a few users.
 4. **Can you mix?** Yes. Native for mail and OneDrive with ShareGate for SharePoint is a common split. The shared spine works the same either way.
 
+**Tip:** whatever you pick, decide before you run 02. **Trap:** if you mix, decide per person, not per workload, for mail: a person is either a native move (mail user) or a tool copy (mailbox), never both.
+
 ## What stays the same whichever you pick
 
 These parts of the toolkit don't care how the data moves:
 
 - [01 Source inventory](../01-SourceInventory/)
-- [02 Target mailboxes](../02-TargetMailboxes/). For the native route, read the identity mapping note in A first, because native migration needs mail users, not mailboxes
-- [04 Target OneDrives](../04-TargetOneDrives/)
+- [02 Target mailboxes](../02-TargetMailboxes/), except for anyone moving by the native route: they need stamped mail users from [A's `New-TargetMailUsers.ps1`](A-Microsoft-native/New-TargetMailUsers.ps1), not mailboxes
+- [04 Target OneDrives](../04-TargetOneDrives/), again except for native OneDrive moves, which fail if the destination OneDrive already exists
 - [05 Mail config](../05-MailConfig/)
 - [06 Groups, Teams and sites](../06-GroupsTeamsSites/)
 - [07 Domain cutover](../07-DomainCutover/)

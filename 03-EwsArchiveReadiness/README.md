@@ -1,12 +1,12 @@
 # Test-EwsArchiveReadiness
 
-**TL;DR:** Main mailboxes copying fine but every archive failing with 'Unauthorized'? It's almost always EWS, in one tenant or the other. This script signs in to the source and then the destination, checks every EWS layer that can block an archive copy, and fixes them with `-Fix`. One run, both tenants. It's read-only without `-Fix`.
+**TL;DR:** Main mailboxes copying fine but every archive failing with 'Unauthorized'? It's almost always EWS, in one tenant or the other. This script signs in to the source and then the destination, checks every EWS layer that can block an archive copy, and fixes them with `-Fix`. One run, both tenants. It's read-only without `-Fix`. Examples use fabrikam.com as the source and contoso.com as the destination.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 2.0.1 |
-| Released | 8 November 2026 |
+| Version | 2.0.2 |
+| Released | 9 November 2026 |
 | Licence | MIT |
 
 Part 3 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it before you copy archives, once [New-TargetMailboxes](../02-TargetMailboxes/) has built the destination.
@@ -85,7 +85,24 @@ After fixing, restart your migration tool so it gets fresh tokens, and run step 
 
 ## Output
 
-Each finding prints under its tenant as OK, Fixed, Problem or Warning. A summary shows the problems, fixes and warnings per tenant. Everything goes to `EwsArchiveReadiness-<date>.csv` with a Side column.
+Each finding prints under its tenant as OK, Fixed, Problem or Warning. A summary shows the problems, fixes and warnings per tenant. Everything goes to `EwsArchiveReadiness-<date>.csv` with a Side column. A `-Fix -WhatIf` run writes it too, so you have something to show before you change anything.
+
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | Your copy tool's own pre-flight. ShareGate and others test connections and permissions, but on the live migration none of them said "EWS allow list" or which tenant. They said 'Unauthorized'. Use this to find the layer, then let the tool copy |
+| Microsoft's own | Native cross-tenant mailbox migration doesn't use EWS at all: it's a mailbox move between the tenants, archives included. If EWS is the only thing stopping you and you have time to set up the [native route](../copy-options/A-Microsoft-native/), that's the way round it, and it keeps working after 1 April 2027 |
+| By hand | `Get-OrganizationConfig \| Format-List Ews*` and `Get-CASMailbox -ResultSize Unlimited \| Where-Object EwsEnabled -eq $false` in each tenant, then `Set-OrganizationConfig -EwsAllowedAppIDs` with the full list (read it first). Check `full_access_as_app` in Entra ID, Enterprise applications, the app, Permissions. About 20 minutes per tenant once you know the layers |
+
+## Tips and traps
+
+- **Tip:** run it without `-Fix` first and keep the CSV. If anything else in the tenant stops working after the fix, it's your record of what was there before.
+- **Tip:** test with one small archive before you queue the big ones. A pass in 10 minutes is better proof than any report.
+- **Trap:** fixing one tenant. A copy reads from the source and writes to the destination. Both need the app ID on the list.
+- **Trap:** `EwsAllowedAppIDs` with one ID replaces the whole list. Read it, add yours, write it back. The script does.
+- **Trap:** guides written before October 2026. `EwsApplicationAccessPolicy EnforceAllowList` with an app ID matches user agents, not apps, and keeps your tool out.
+- **Trap:** waiting on 1 April 2027. EWS goes for good. Anything still in a source archive after that needs the native route or another way out.
 
 ## Lessons learnt
 
@@ -103,6 +120,7 @@ Each finding prints under its tenant as OK, Fixed, Problem or Warning. A summary
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 2.0.2 | 2026-11-09 | The findings CSV is written under `-WhatIf` too, so a dry run leaves a report |
 | 2.0.1 | 2026-11-09 | Missing `full_access_as_app` is a Warning, since tools using delegated EWS don't need it. Timing and wording match Microsoft's guidance (allow-list changes can take up to 24 hours) |
 | 2.0.0 | 2026-11-08 | Checks source and destination in one run. Separate sign-in for each, with a wrong-tenant guard and a retry through a fresh account picker. `-SourceAdmin`, `-DestinationAdmin` and `-Only`. Summary per tenant |
 | 1.0.4 | 2026-11-08 | Clears legacy rules by setting `EwsApplicationAccessPolicy` to `$null`, which removes both lists in one go |

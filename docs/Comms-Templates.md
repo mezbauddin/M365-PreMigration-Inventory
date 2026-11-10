@@ -1,15 +1,21 @@
 # Comms templates
 
-**TL;DR:** Plain-English emails for staff at each stage of a tenant-to-tenant move, plus a short update for the business owner. No jargon: nobody outside IT needs to know what a tenant is. Swap the bits in [square brackets], cut anything that doesn't apply, and send them from someone people know, not from IT.
+**TL;DR:** Plain-English emails for staff at each stage of a tenant-to-tenant move, a notice for clients and suppliers, a postponement notice, an "it's done early" note, and updates for the business owner, including a one-message summary for cutover night. No jargon: nobody outside IT needs to know what a tenant is. Swap the bits in [square brackets], cut anything that doesn't apply, and send them from someone people know, not from IT.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
-| Released | 9 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part of the [docs](README.md) for my [M365 tenant-to-tenant migration toolkit](../README.md). The timings match the [cutover runbook](Cutover-Runbook.md).
+
+## Why these exist
+
+Most of the calls on the first morning aren't about a broken migration. They're from people who didn't know they'd need to sign in again, or clients whose email bounced for ten minutes and nobody warned them.
+
+**Without them:** IT writes the emails at 11pm, in IT language, and sends them to the mailbox that's moving. People don't read them, and the helpdesk queue fills with questions the email should have answered.
 
 ## A few rules I follow
 
@@ -55,7 +61,7 @@ The move happens [tonight / this weekend]. Here's what to expect when you start 
 
 **Before you finish today**
 - Save and close everything you're working on.
-- Make sure anything in OneDrive or on your desktop is saved and synced.
+- Make sure anything in OneDrive or on your desktop is saved and synced. Close OneNote once it has synced.
 - [If MFA will be set up again: Have your work phone with you tomorrow. You'll need it to set up sign-in.]
 
 **Tomorrow morning**
@@ -140,6 +146,65 @@ Anything else, ask [name].
 
 [Name]
 
+## T-7: notice for clients and suppliers
+
+Only for the people outside the company who email you a lot: key clients, suppliers, your accountant. Send it from the business owner, a week ahead. Keep it short; they don't need the detail.
+
+**Subject:** A short pause in our email on [day, date]
+
+Hello [name],
+
+On [day, date], between [time] and [time], we're moving our email to a new system. Our email addresses aren't changing.
+
+During that window, a message you send us might bounce back or arrive late. If you get a bounce, please send it again after [time], or call us on [phone].
+
+Anything urgent that evening, please phone [name] on [phone].
+
+Thank you,
+[Name]
+[Company]
+
+## Postponement notice
+
+For staff, and for anyone outside who got the notice above. Send it as soon as the go/no-go is a no, or the night after a rollback. Short, calm, and with the new date if you have one.
+
+**Subject:** The email move planned for [date] is postponed
+
+Hi all,
+
+We've decided not to go ahead with moving our email and files on [date]. [One honest line, e.g. "A check we ran beforehand found something we want to fix first." or "We started the move and chose to put things back as they were."]
+
+**What this means for you**
+- Nothing changes. Keep working exactly as you are, with the same sign-in and password.
+- [If a rollback happened: If you signed in to anything new last night, ignore it. Use your usual sign-in.]
+- [If anything was sent during a rollback: If you sent or expected an email between [time] and [time] last night, please check it arrived, and resend if not.]
+
+**What happens next**
+- The new date is [date]. / We'll confirm a new date by [date].
+- You'll get the usual reminder the week before and the day before.
+
+Thanks for your patience,
+[Name]
+
+## "It's done early" notice
+
+When cutover went smoothly and finished well before the window you warned people about. Send it the same evening, or first thing, so people don't sit waiting.
+
+**Subject:** The email move is done, ahead of schedule
+
+Hi all,
+
+Good news: the move finished early, at [time] [tonight / today]. Email is flowing normally.
+
+**What to do**
+- Nothing until [tomorrow morning / Monday]. Then follow the sign-in steps we'll send first thing.
+- [If people can start now: If you want to sign in now, use your email address and the temporary password you'll get from [name].]
+
+[For clients, if you sent them the notice: "The pause in our email we mentioned for [date] is over, earlier than expected. Everything is working normally."]
+
+Thanks,
+[Name]
+
 ## Business owner update
 
 Short, non-technical, and honest. Send it at T-7, after cutover, and at sign-off.
@@ -169,3 +234,42 @@ Hi [name],
 **Next update:** [date]
 
 [Name]
+
+## Cutover night: one-message summary for the business owner
+
+One message, the night it happens or first thing next morning. It answers "is it done, and what do I need to know?" without making them open anything. Fill it from the 09 summary, the migration report, and the sign-in check. No names of individuals, no passwords, no technical detail they'd have to ask about.
+
+**Subject:** Done: email and files moved [tonight / on date]
+
+Hi [name],
+
+**Result:** The move is done. Email to and from [fabrikam.com] is flowing in the new system, and test sign-ins worked.
+
+**Timings**
+- Started [time], domain moved at [time], mail flowing again at [time]. Total time email could bounce: about [x] minutes.
+
+**Checks**
+- Validation: [x] of [y] accounts fully checked and passing. [z] with a warning we're looking at, none blocking. / [z] need a fix tomorrow, listed below.
+- Sign-in: test sign-ins for [2] people worked from [location]. Everyone will sign in with a temporary password tomorrow morning.
+- Mail: test messages in and out from an outside address arrived.
+
+**Still to finish**
+- [e.g. Older mail and archives for a few large mailboxes: due by [date].]
+- [e.g. OneDrive files: copying from tomorrow, due by [date].]
+
+**What happens tomorrow**
+- [Name] hands out temporary passwords from [time]. [Name] is on hand at [location] until [time].
+- Old accounts are switched off [tomorrow / on date], so nobody keeps working in the old system.
+
+**Anything you need to decide:** [e.g. "Nothing tonight." / "OK to switch off the old accounts tomorrow at noon?"]
+
+I'll send a fuller update at [time / date].
+
+[Name]
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.1.0 | 2026-11-10 | Client and supplier notice, postponement notice, "done early" notice, cutover night one-message summary for the business owner |
+| 1.0.0 | 2026-11-09 | First release |

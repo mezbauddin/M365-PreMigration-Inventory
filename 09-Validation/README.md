@@ -5,11 +5,11 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.1.0 |
+| Version | 1.1.1 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
-Part 9 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it after the main copy, again on cutover night once [07](../07-DomainCutover/) has finished, and once more a few days later.
+Part 9 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it after the main copy (T-7 and T-3), again on cutover night once [07](../07-DomainCutover/) has finished (step 16 of the [cutover runbook](../docs/Cutover-Runbook.md)), at the end of T+1, and once more at T+7 for sign-off.
 
 ## Why you need this
 
@@ -37,7 +37,7 @@ This pulls it together. It reads the inventory from [01](../01-SourceInventory/)
 | Items, ArchiveItems | Item counts within `-Tolerance` percent (default 5) of `04-Mailboxes.csv` | Always |
 | Address | Plan rows: old address is primary. Everyone else: old address present | `-Domain` |
 | SignIn | Plan rows with a mailbox sign in with their old address | `-Domain` and the plan |
-| X500 | The source LegacyExchangeDN is present as an X500 address | `-SourceSnapshot` |
+| X500 | The source LegacyExchangeDN is present as an X500 address | `-SourceSnapshot`: the night's `SourceRecipients-pre-<stamp>.csv`, the same file Switch-TargetAddresses used |
 | OneDrive | People (Kind User) have a OneDrive for their sign-in name | `-SharePointAdminUrl` and the plan |
 | Mapping | Plan rows that aren't in the mapping file | The plan |
 | ListMembers | Distribution list member counts against the 05 export | `-MailConfigFolder` |
@@ -68,7 +68,7 @@ How the results are judged:
 # After cutover: everything
 .\Test-TargetTenant.ps1 -TenantId <destination-tenant-guid> -InventoryFolder .\Inventory-fabrikam-<date> `
     -MappingFile .\UserMapping.csv -Domain fabrikam.com, fabrikam.co.uk `
-    -SourceSnapshot .\SourceRecipients-<date>.csv -MailConfigFolder .\MailConfig-fabrikam.com-<date> `
+    -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -MailConfigFolder .\MailConfig-fabrikam.com-<date> `
     -SharePointAdminUrl https://contoso-admin.sharepoint.com
 
 # Stricter on item counts
@@ -76,10 +76,12 @@ How the results are judged:
 
 # The morning after: name the account, and tell it when cutover was
 .\Test-TargetTenant.ps1 -TenantId <destination-tenant-guid> -AdminUpn admin@contoso.onmicrosoft.com `
-    -InventoryFolder .\Inventory-fabrikam-<date> -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate 2026-11-10
+    -InventoryFolder .\Inventory-fabrikam-<date> -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate <yyyy-mm-dd>
 ```
 
 **Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, signs in to Exchange Online and Graph as the one you named, and prints `Signed in as X to tenant Y`. On the live cutover this would have saved a confusing error at the worst moment.
+
+**Trap:** point `-SourceSnapshot` at a `-pre` file. A `-post` snapshot was taken after the source addresses were stripped, has no addresses on the domain, and makes every X500 row look wrong.
 
 Run it from the folder with `TargetBuildPlan.csv`, or pass `-PlanFile`.
 
@@ -98,8 +100,8 @@ The CSV contains names and addresses. Keep it out of source control and shared d
 - **Keep the mapping file honest.** Everything is checked through it. If someone was added to the plan late and never made it into the mapping, the Mapping check flags them, but nothing else about them is checked until you add the row.
 - **Run it more than once.** Before cutover it tells you what's left to copy. On the night it tells you whether cutover worked. A few days later it catches anything that drifted, like a licence someone removed.
 - **The password flag matters.** A temporary password handed out on cutover night should stop working the first time it's used. If the change-at-next-sign-in flag is off, it stays valid until someone changes it, and it was probably written on paper. Graph returns an empty value rather than False when the flag is off, so the script treats empty as off.
-- **Test sign-ins from where the users are.** The destination on the live cutover had a "block outside allowed countries" policy. I was testing from abroad, and every test sign-in failed with error 53003. The accounts were fine. The CA-Location warning is there so you know before you panic.
-- **Report the MFA gap, don't fix it.** No MFA policy is a real finding, and it goes in the handover for the business owner. Changing security policy in a tenant that hosts other companies isn't part of a migration.
+- **Test sign-ins from where the users are.** The destination on the live cutover had a "block outside allowed countries" policy. I was testing from another country, and every test sign-in failed with error 53003. The accounts were fine. The CA-Location warning is there so you know before you panic.
+- **Report the MFA gap, don't fix it.** No MFA policy is a real finding, and it goes in the handover for the business owner. Changing tenant-wide security policy, especially in a destination that serves more than one business, isn't part of a migration.
 - **Use it for sign-off.** The summary table is the closest thing to a straight answer when the business asks if it's finished. I attach the CSV to the handover.
 
 ## Three ways to do it
@@ -114,5 +116,6 @@ The CSV contains names and addresses. Keep it out of source control and shared d
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.1 | 2026-11-10 | Snapshot is `SourceRecipients-pre-<stamp>.csv` (the night's `-pre` file). Run times match the cutover runbook. Help examples generalised |
 | 1.1.0 | 2026-11-10 | `-AdminUpn`. Password, CA-Location and MFA checks. `-CutoverDate`, `-SkipTenantChecks` |
 | 1.0.0 | 2026-11-09 | First release |

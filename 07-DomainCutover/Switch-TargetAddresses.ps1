@@ -40,7 +40,9 @@
     Microsoft 365 groups and Teams too, e.g. sales@fabrikam.com -> sales@contoso.onmicrosoft.com.
 
 .PARAMETER SourceSnapshot
-    SourceRecipients-<date>.csv from Remove-SourceDomain. Holds the old addresses and LegacyExchangeDN values.
+    SourceRecipients-pre-<stamp>.csv from Remove-SourceDomain. Holds the old addresses and LegacyExchangeDN values.
+    Use the night's file: Remove-SourceDomain -SnapshotOnly run on cutover night just before the release (the
+    -RemoveDomain run's own -pre file works too). The T-1 day file is the fallback. Never a -post file.
 
 .PARAMETER Domain
     The domains that moved. Only addresses on these (and accepted in the destination) are added.
@@ -68,16 +70,16 @@
     to the recycle bin) and retry the add. Never touches mailboxes, mail users or contacts. Supports -WhatIf.
 
 .EXAMPLE
-    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-20261110-1800.csv `
+    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv `
         -Domain fabrikam.com -WhatIf
 
 .EXAMPLE
     .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -MappingFile .\UserMapping.csv `
-        -SourceSnapshot .\SourceRecipients-pre-20261110-1800.csv -Domain fabrikam.com, fabrikam.co.uk -RemoveConflictingGuests -ResetPasswords
+        -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain fabrikam.com, fabrikam.co.uk -RemoveConflictingGuests -ResetPasswords
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.1.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit

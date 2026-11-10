@@ -1,11 +1,11 @@
 # Lessons learnt from a live cutover
 
-**TL;DR:** What went wrong, or nearly did, on a real small-business tenant-to-tenant cutover on 10 November 2026, and what changed in the toolkit because of it. Grouped into before the night, on the night, and after. Each lesson says what happened, what it cost, the fix, and which script now handles it. Names, domains and tenants are removed; examples use fabrikam.com moving into the contoso tenant.
+**TL;DR:** What went wrong, or nearly did, on a real small-business tenant-to-tenant cutover, and what changed in the toolkit because of it. Grouped into before the night, on the night, and after. Each lesson says what happened, what it cost, the fix, and which script now handles it. Names, domains and tenants are removed; examples use fabrikam.com moving into the contoso tenant.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
+| Version | 1.0.1 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -17,7 +17,7 @@ If you read nothing else:
 
 1. Find out who can log in to the **DNS host**, not just the registrar, two weeks out.
 2. Add the domain to the destination **first**, publish its TXT, then release it from the source.
-3. Run `07 Test-CutoverReadiness.ps1` the day before. It finds the blockers you'd otherwise meet at 9pm.
+3. The day before, take the `-pre` snapshot, then run `07 Test-CutoverReadiness.ps1` with it. Do both again on the night before the release. It finds the blockers you'd otherwise meet at 9pm. The order is in the [cutover runbook](Cutover-Runbook.md).
 4. Every script that changes a tenant takes `-AdminUpn`. Use it.
 5. One version of every Microsoft.Graph module, and a fresh PowerShell window per task.
 6. After cutover, rebuild the user mapping before any OneDrive copy or incremental.
@@ -42,7 +42,7 @@ If you read nothing else:
 | What happened | `Remove-SourceDomain -WhatIf` listed deleted users still in the recycle bin, a user who existed only as a proxy address on another object, and an enterprise app with a reply URL on the domain. Changes made in Exchange took a while to show in Entra ID (sync lag), so a second run still showed blockers that had been fixed |
 | Impact | Each blocker would have stopped the removal on the night |
 | Fix | Cleared them the day before: deleted users renamed and re-deleted, proxy addresses removed, the app's URL changed. Waited, re-ran, confirmed empty |
-| Now handled by | [07 Remove-SourceDomain.ps1 -WhatIf](../07-DomainCutover/), [07 Clear-DeletedUserDomain.ps1](../07-DomainCutover/), [07 Test-CutoverReadiness.ps1](../07-DomainCutover/) |
+| Now handled by | [07 Remove-SourceDomain.ps1 -BlockersOnly](../07-DomainCutover/) at T-7 and T-1, [07 Clear-DeletedUserDomain.ps1](../07-DomainCutover/), [07 Test-CutoverReadiness.ps1](../07-DomainCutover/) |
 
 **Trap:** a clean `-WhatIf` an hour after a fix isn't proof. Exchange and Entra ID sync on their own schedule. Re-run the next morning.
 
@@ -144,7 +144,7 @@ If you read nothing else:
 
 | | |
 | --- | --- |
-| What happened | The destination had a "block outside allowed countries" Conditional Access policy. The admin testing the moved accounts was abroad. Sign-in failed with error 53003 |
+| What happened | The destination had a "block outside allowed countries" Conditional Access policy. The admin testing the moved accounts was in another country. Sign-in failed with error 53003 |
 | Impact | Looked like a broken migration at the worst moment |
 | Fix | Tested from inside the allowed location (a colleague on site). Left the policy alone |
 | Now handled by | [09 Test-TargetTenant.ps1](../09-Validation/) warns about every policy with a location condition; [07 Test-CutoverReadiness.ps1](../07-DomainCutover/); the runbook's T-1 test sign-in plan |
@@ -204,4 +204,5 @@ If you read nothing else:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.1 | 2026-11-10 | Readiness and blocker steps match the cutover runbook. Job details generalised |
 | 1.0.0 | 2026-11-10 | First version, written the morning after cutover |

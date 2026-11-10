@@ -5,17 +5,37 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Tested | Production: about 40 mailboxes, 1.7 TB of mail (most of it archives), one 140 GB SharePoint site, four Teams, 50 GB of OneDrive |
+| Version | 2.0.0 |
+| Tested | Production, on a small business tenant: mailboxes with large archives, SharePoint, Teams and OneDrive |
 | Tool version | ShareGate Migrate 26.11 |
-| Script | `Copy-DrivesWithShareGate.ps1` 1.1.0 |
+| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0 |
+| Licence | MIT (this page and script; ShareGate itself is a paid product) |
 
 Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 2.0.0 | 2026-11-10 | Adds what happens without it, three ways and a tips and traps summary. Live-job specifics replaced with generic wording; the lessons are unchanged |
+| 1.1.0 | 2026-11-10 | `Copy-DrivesWithShareGate.ps1` 1.1.0 leaves out rows marked Skip by `New-DriveCopyList.ps1` |
+| 1.0.0 | 2026-11-09 | First version, written up from a live migration |
 
 ## Why ShareGate for this one
 
 - **SharePoint and Teams.** Microsoft's native route doesn't move Teams content, and its SharePoint add-on was Enterprise Agreement only. This customer wasn't on one.
-- **Size.** For about 40 people, setting up native migration (app registration, trust between tenants, identity mapping) would have taken longer than the copy itself.
+- **Size.** For a small business, setting up native migration (app registration, trust between tenants, identity mapping) would have taken longer than the copy itself.
 - **Incrementals.** Copy early, top up before cutover, top up again after. Same job, same mapping.
+
+## What happens without it
+
+Without a tool like this (or option A), a business with real SharePoint and Teams use is left with [option C](../C-No-budget/): PSTs for mail and download-and-upload for files. That means:
+
+- **Versions, authors and permissions are lost.** Every file shows as created by the migration account on the day of the copy.
+- **No incrementals.** Mail and files have to freeze while the copy runs, or whatever changed afterwards stays behind.
+- **Teams arrive as folders.** Channel files survive; the team structure, membership and tabs have to be rebuilt by hand.
+
+And without the steps on this page, ShareGate itself trips over the gotchas below: archives fail on EWS, shared mailboxes arrive without calendars, members don't come across because the mapping wasn't imported.
 
 ## Before you open ShareGate
 
@@ -54,7 +74,7 @@ Run these from the toolkit first. They make the ShareGate steps short:
 
 | What happened | Fix |
 | --- | --- |
-| The team picker search found nothing for 'ups' in 'USPS File Opening' | Search from the start of the name |
+| The team picker search found nothing for a word in the middle of a team name ('board' in 'Client Onboarding') | Search from the start of the name |
 | I forgot to import the user mapping, so members didn't come across | Export members from the source groups and add them with `Add-UnifiedGroupLinks`, mapped through the same CSV. Import the mapping before you start next time |
 | One channel showed an error, but its files were all green | The error was on channel settings, not content. Check the details before re-running |
 
@@ -146,3 +166,20 @@ Destination folders must exist first. You need site collection admin on every so
 - Import the user mapping into **every** job before clicking Start.
 - Run the EWS readiness check in both tenants on day one, not after the first archive failure.
 - Create Teams and group-connected sites myself, so their email addresses and URLs are what I want, then copy channels into them.
+
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | This page: ShareGate Migrate for mail, archives, Teams, SharePoint and OneDrive, with [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) for many OneDrives at once. Other migration suites work the same way: build the destination, map users, copy, top up |
+| Microsoft's own | [A. Microsoft native](../A-Microsoft-native/) for mailboxes and OneDrive. Nothing native for shared Teams content, and SharePoint only with the Enterprise Agreement add-on. A common split is native for mail and ShareGate for SharePoint and Teams |
+| By hand | [C. No budget](../C-No-budget/): PST export and import for mail, Graph or the sync client for files. Fine for a handful of people with little shared data |
+
+## Tips and traps
+
+- **Trap:** archives copy over EWS. Run [03 EWS archive readiness](../../03-EwsArchiveReadiness/) in both tenants before the first mail job, and finish big archives before EWS ends on 1 April 2027.
+- **Trap:** a shared mailbox destination gets email only. Convert people to user mailboxes ([02](../../02-TargetMailboxes/)) and run an incremental.
+- **Trap:** the user mapping isn't remembered between job types. Import the `.sgum` into every mail, Teams, SharePoint and OneDrive job, and rebuild it after cutover.
+- **Trap:** custom scripts on a destination site switch themselves off after about a day. Re-run `Set-SPOSite -DenyAddAndCustomizePages 0` before every SharePoint incremental.
+- **Tip:** use the same PC and the same ShareGate install for every incremental. Its local history is how it knows what's already copied.
+- **Tip:** export each job's report and keep it with the toolkit's CSVs. ShareGate's report is your evidence of what moved; [tools/Get-MigrationReport.ps1](../../tools/) covers the toolkit's side.

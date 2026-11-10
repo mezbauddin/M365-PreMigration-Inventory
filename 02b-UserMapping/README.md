@@ -1,13 +1,24 @@
 # 02b User mapping
 
-**TL;DR:** One file says who is who between the two tenants, and every later step depends on it. `New-UserMapping.ps1` reads both tenants, matches every mailbox, list and contact, and writes the mapping CSV, a ShareGate `.sgum`, and a short list of the matches a human should check. It changes nothing in either tenant.
+**TL;DR:** One file says who is who between the two tenants, and every later step depends on it. `New-UserMapping.ps1` reads both tenants, matches every mailbox, list and contact, and writes the mapping CSV, a ShareGate `.sgum`, and a short list of the matches a human should check. It changes nothing in either tenant. Run it after 02, and again after cutover. Examples use fabrikam.com as the source and contoso.com as the destination.
 
 | | |
-|---|---|
-| Author | Mezba Uddin (Microsoft MVP) |
+| --- | --- |
+| Author | Mezba Uddin, Microsoft MVP |
 | Version | 1.1.0 |
-| Runs against | Both tenants, read-only |
-| Needs | ExchangeOnlineManagement 3.x, View-Only Recipients (or higher) in both tenants |
+| Released | 9 November 2026 |
+| Licence | MIT |
+
+Part 2b of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it once [New-TargetMailboxes](../02-TargetMailboxes/) has built the destination.
+
+## Requirements
+
+- `ExchangeOnlineManagement` 3.x
+- View-Only Recipients (or higher) in both tenants. It only reads
+
+```powershell
+Install-Module ExchangeOnlineManagement -Scope CurrentUser
+```
 
 ## Why you need it
 
@@ -51,8 +62,11 @@ Rules on top:
 ## Run it
 
 ```powershell
-# After 02 has built the destination mailboxes
-.\New-UserMapping.ps1 -SourceAdmin admin@fabrikam.com -DestinationAdmin admin@contoso.com
+# After 02 has built the destination mailboxes. The source still owns fabrikam.com
+.\New-UserMapping.ps1 -SourceAdmin admin@fabrikam.com -DestinationAdmin admin@contoso.onmicrosoft.com
+
+# After cutover. fabrikam.com now lives in the destination, so sign in to the source with its onmicrosoft.com name
+.\New-UserMapping.ps1 -SourceAdmin admin@fabrikam.onmicrosoft.com -DestinationAdmin admin@contoso.onmicrosoft.com
 
 # Already have a hand-built one? See where they disagree
 .\New-UserMapping.ps1 -CompareWith .\UserMapping-old.csv
@@ -82,6 +96,23 @@ Output:
 
 Fix what's in the review list with the overrides file and run it again until the review list is empty or you're happy with it.
 
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | ShareGate, and most copy tools, have a user mapping screen that matches by name or address and takes a CSV or its own file (`.sgum` for ShareGate). Good for content authors. It doesn't know about your staged aliases, guests or another company's `info@`, and its file stops matching after cutover unless you rebuild it |
+| Microsoft's own | There's no mapping tool between two tenants. For the native route, the mapping is the mail users you create in the destination, so their addresses are the mapping. Export recipients from both Exchange admin centres and match them in a spreadsheet |
+| By hand | Two exports, `Get-Recipient` in each tenant, matched with `VLOOKUP` on alias or address, then fixed row by row. Fine for twenty people. Check every row where two people share a name |
+
+## Tips and traps
+
+- **Tip:** sign in to the source with its onmicrosoft.com admin after cutover. `admin@fabrikam.com` no longer exists in the source once 07 has moved the domain.
+- **Tip:** keep `MappingOverrides.csv` with the project files. It's the record of every decision a human made, and the next run needs it.
+- **Tip:** run it again after [New-TargetResourceMailboxes](../02-TargetMailboxes/) so rooms and equipment are in the mapping. They carry the toolkit tag, so they match on step 3.
+- **Trap:** guests. A destination guest with the person's old address looks like a perfect match. The script never picks a guest, but a hand-built file often does.
+- **Trap:** another company's `info@`. In a destination that hosts several companies, alias guessing finds the wrong one. Pass `-DestinationDomain`.
+- **Trap:** an old `.sgum` after cutover. It maps by sign-in name, the names changed, and an incremental with it maps nobody: every file shows as created by the migration account.
+
 ## Lessons learned
 
 - **Run it twice.** Once after 02, and again after [07](../07-DomainCutover/). Sign-in names change at cutover, and the `.sgum` maps by sign-in name. An incremental with the old file maps nobody.
@@ -91,3 +122,10 @@ Fix what's in the review list with the overrides file and run it again until the
 - **Keep the output out of source control.** It's a list of every person and address in two companies.
 
 Not sponsored by ShareGate. The `.sgum` is there because that's the tool I used on the live migration.
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.1.0 | 2026-11-09 | Never maps to a guest. `-DestinationDomain` scopes alias, local part and name guesses to the domains this migration owns. `-PlanFile` uses part 02's build plan first. `-AliasPrefix` |
+| 1.0.0 | 2026-11-09 | First release |

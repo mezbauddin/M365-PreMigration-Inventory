@@ -1,11 +1,11 @@
 # Domain cutover
 
-**TL;DR:** Eight scripts for the night a domain moves between Microsoft 365 tenants. Check you're ready, record the DNS, get the destination's verification record published first, release the domain from the source, verify it in the destination within minutes, then give everyone their old addresses back with X500s, and block the old accounts. Every script that changes something supports `-WhatIf`, signs in as the account you name, and refuses to run against the wrong tenant. These are field notes from a live cutover on 10 November 2026, written so you don't repeat my evening.
+**TL;DR:** Eight scripts for the night a domain moves between Microsoft 365 tenants. Check you're ready, record the DNS, get the destination's verification record published first, release the domain from the source, verify it in the destination within minutes, then give everyone their old addresses back with X500s, and block the old accounts. Every script that changes something supports `-WhatIf`, signs in as the account you name, and refuses to run against the wrong tenant. These are field notes from a live cutover, written so you don't repeat my evening. The order to run them in is the [cutover runbook](../docs/Cutover-Runbook.md).
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.1.0 |
+| Version | 1.2.0 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -17,53 +17,70 @@ A domain can only be verified in one Microsoft 365 tenant at a time. So cutover 
 
 ## Order of play
 
+The canonical order for the whole migration lives in the [cutover runbook](../docs/Cutover-Runbook.md). This table is the 07 slice of it, with the same timings. If the two ever disagree, the runbook wins.
+
 This is the add-first order. It turned a potential multi-hour bounce window into a few minutes, because verification is instant once the source releases the domain and the TXT record is already live.
 
 | # | When | Script | Tenant | What it does | Changes anything? |
 | --- | --- | --- | --- | --- | --- |
-| 1 | T-3 days and T-1 hour | `Test-CutoverReadiness.ps1` | Both, read-only | Go/no-go: blockers, snapshot, mapping, conflicts, domain state, DNS, Conditional Access | No |
-| 2 | T-3 days | `Export-DomainDns.ps1 -FullScan` | DNS | Finds where DNS really lives, NS TTL, and every record it can see | No |
-| 3 | At least 48 h before, only if you can't log in to the DNS host | `Set-DomainDnsRecords.ps1 -FromScan`, then move the name servers | DNS | Replicates the zone somewhere you control | DNS |
-| 4 | T-1 day | `Remove-SourceDomain.ps1 -SnapshotOnly` and `-BlockersOnly` | Source | The `-pre` snapshot, and the list of blockers to clear | Writes CSVs |
-| 5 | T-1 day | `Clear-DeletedUserDomain.ps1` | Source | Frees the domain from deleted users | Source |
-| 6 | Night, step 1 | `Add-TargetDomain.ps1` | Destination | Adds the domain unverified, gives you the MS=ms TXT | Destination |
-| 7 | Night, step 2 | Publish the TXT, then `Add-TargetDomain.ps1 -WaitForDns` | DNS | Confirms every authoritative name server serves the TXT | DNS |
-| 8 | Night, step 3 | `Remove-SourceDomain.ps1 -RemoveDomain` | Source | Moves everything off and removes the domain. Mail starts bouncing here | Source |
-| 9 | Night, step 4, straight after | `Add-TargetDomain.ps1 -Verify` | Destination | Verifies. Mail stops bouncing once MX and the tenant agree | Destination |
-| 10 | Night, step 5 | `Switch-TargetAddresses.ps1` with the `-pre` snapshot | Destination | Old addresses, X500s, primary addresses, sign-in names, passwords | Destination |
-| 11 | Night, step 6 | DKIM CNAMEs, then `Add-TargetDomain.ps1 -EnableDkim` | DNS, destination | Signs outbound mail as the domain again | Destination |
-| 12 | Next morning | `Block-SourceSignIn.ps1` | Source | Stops people working in the old tenant | Source |
+| 1 | T-14 | `Export-DomainDns.ps1 -FullScan` | DNS | Finds where DNS really lives, the NS TTL, and every record it can see | No |
+| 2 | T-14, only if you can't log in to the DNS host | `Set-DomainDnsRecords.ps1 -FromScan`, then move the name servers | DNS | Replicates the zone somewhere you control. The NS TTL is often 48 hours, so this can't wait | DNS |
+| 3 | T-7 | `Remove-SourceDomain.ps1 -BlockersOnly` | Source, read-only | Lists every blocker to clear | Writes a CSV |
+| 4 | T-7 | `Clear-DeletedUserDomain.ps1` | Source | Frees the domain from deleted users | Source |
+| 5 | T-1 day | `Remove-SourceDomain.ps1 -SnapshotOnly`, then `-BlockersOnly` again | Source | Writes `SourceRecipients-pre-<stamp>.csv`, then confirms no blockers are left | Writes CSVs |
+| 6 | T-1 day | `Test-CutoverReadiness.ps1 -SourceSnapshot` (the T-1 `-pre` file) | Both, read-only | Go/no-go: blockers, snapshot, mapping, conflicts, domain state, DNS, Conditional Access | No |
+| 7 | Night, step 3 | `Add-TargetDomain.ps1` | Destination | Adds the domain unverified, gives you the MS=ms TXT | Destination |
+| 8 | Night, steps 4 and 5 | Publish the TXT, then `Add-TargetDomain.ps1 -WaitForDns` | DNS | Confirms every authoritative name server serves the TXT | DNS |
+| 9 | Night, step 6 | `Remove-SourceDomain.ps1 -SnapshotOnly` | Source | The night's `-pre` snapshot. This is the one Switch-TargetAddresses uses | Writes a CSV |
+| 10 | Night, step 7 | `Test-CutoverReadiness.ps1` with the night's `-pre` file | Both, read-only | Final go/no-go. Then the rollback point | No |
+| 11 | Night, step 8 | `Remove-SourceDomain.ps1 -FixApplications -RemoveDomain` | Source | Moves app URIs and everything else off, removes the domain. Mail starts bouncing here | Source |
+| 12 | Night, step 9, straight after | `Add-TargetDomain.ps1 -Verify` | Destination | Verifies. Mail stops bouncing once MX and the tenant agree | Destination |
+| 13 | Night, step 11 | [02](../02-TargetMailboxes/) `New-TargetMailboxes.ps1 -Apply` | Destination | Licenses staged people and converts them to user mailboxes | Destination |
+| 14 | Night, step 12 | `Switch-TargetAddresses.ps1` with the night's `-pre` file, `-WhatIf` then `-RemoveConflictingGuests -ResetPasswords` | Destination | Old addresses, X500s, primary addresses, sign-in names, passwords | Destination |
+| 15 | Night, step 13 | [04](../04-TargetOneDrives/) `Request-TargetOneDrives.ps1` | Destination | OneDrives for the newly licensed people | Destination |
+| 16 | Night, step 17 | DKIM CNAMEs, then `Add-TargetDomain.ps1 -EnableDkim` | DNS, destination | Signs outbound mail as the domain again | Destination |
+| 17 | T+1 | `Block-SourceSignIn.ps1` | Source | Stops people working in the old tenant | Source |
 
 ```powershell
-# T-3 days
-.\Test-CutoverReadiness.ps1 -SourceTenantId <source-guid> -DestinationTenantId <destination-guid> `
-    -SourceAdmin admin@fabrikam.onmicrosoft.com -DestinationAdmin admin@contoso.onmicrosoft.com `
-    -Domain fabrikam.com -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv
+# T-14
 .\Export-DomainDns.ps1 -Domain fabrikam.com -FullScan
 
-# T-1 day
-.\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -SnapshotOnly
+# T-7
 .\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -BlockersOnly
 .\Clear-DeletedUserDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com
 
+# T-1 day: snapshot first, because the readiness check reads it
+.\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -SnapshotOnly
+.\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -BlockersOnly
+.\Test-CutoverReadiness.ps1 -SourceTenantId <source-guid> -DestinationTenantId <destination-guid> `
+    -SourceAdmin admin@fabrikam.onmicrosoft.com -DestinationAdmin admin@contoso.onmicrosoft.com `
+    -Domain fabrikam.com -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv
+
 # The night
 .\Add-TargetDomain.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -Domain fabrikam.com
-#   publish the MS=ms TXT it prints, then:
+#   publish the MS=ms TXT it prints (leave the source's old MS=ms TXT in place), then:
 .\Add-TargetDomain.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -Domain fabrikam.com -WaitForDns
+.\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -SnapshotOnly
+.\Test-CutoverReadiness.ps1 ... -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv     # the file you just wrote
+#   ---- rollback point ----
 .\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -FixApplications -RemoveDomain
 .\Add-TargetDomain.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -Domain fabrikam.com -Verify
+.\New-TargetMailboxes.ps1 -Apply -TargetDomain contoso.onmicrosoft.com -UsageLocation GB -AdminUpn admin@contoso.onmicrosoft.com
 .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -MappingFile .\UserMapping.csv `
     -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain fabrikam.com -WhatIf
 .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -MappingFile .\UserMapping.csv `
     -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain fabrikam.com -RemoveConflictingGuests -ResetPasswords
+.\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com -AdminUpn admin@contoso.onmicrosoft.com
 #   change the two DKIM CNAMEs, then:
 .\Add-TargetDomain.ps1 -TenantId <destination-guid> -AdminUpn admin@contoso.onmicrosoft.com -Domain fabrikam.com -EnableDkim
 
-# Next morning
+# T+1
 .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -MappingFile .\UserMapping.csv
 ```
 
 Tip: keep two PowerShell windows, one per tenant, and say the tenant out loud before each command. The scripts check, but your hand-typed commands don't.
+Trap: the readiness check needs `-SourceSnapshot`, so the snapshot always comes before it. Every `Remove-SourceDomain` run except `-BlockersOnly` writes one.
+Tip: if the night goes wrong after the release, the runbook has a [worked rollback](../docs/Cutover-Runbook.md#rollback). It relies on the source's old MS=ms TXT still being in DNS, so don't delete it until T+7.
 
 ## What changes in DNS
 
@@ -86,7 +103,7 @@ Less than most people expect. Microsoft 365 builds the MX host from the domain n
 
 Each section: what it does, why, what happens without it, and three ways to do the job: a paid tool, Microsoft's own portals, and by hand or with this script.
 
-### 1. `Test-CutoverReadiness.ps1` (1.0.0): the go/no-go
+### 1. `Test-CutoverReadiness.ps1` (1.0.1): the go/no-go
 
 **What:** read-only checks across both tenants and DNS, printed as PASS, WARN or FAIL, saved to `CutoverReadiness-<stamp>.csv`. GO means no FAIL. It signs in to the source then the destination with the accounts you name, and runs `..\tools\Test-ModuleHealth.ps1` first if it's there.
 
@@ -98,7 +115,7 @@ Each section: what it does, why, what happens without it, and three ways to do t
 - **Microsoft native:** Entra admin centre (Deleted users, App registrations), Exchange admin centre (Recipients, search each old address), the Microsoft 365 admin centre domain page. Allow an hour.
 - **By hand:** `nslookup -type=txt fabrikam.com <each name server>` and the Graph queries in the script.
 
-Tip: run it at T-3 days, fix everything, then again an hour before. Read every WARN.
+Tip: run it at T-1 day with that day's `-pre` snapshot, fix everything, then once more on the night with the night's snapshot, just before the rollback point. Read every WARN.
 
 ### 2. `Export-DomainDns.ps1` (1.1.0): know your DNS
 
@@ -114,7 +131,7 @@ Tip: run it at T-3 days, fix everything, then again an hour before. Read every W
 
 Trap: a wordlist scan only finds names it asks for. Zone transfers are nearly always refused. Ask the website owner and every SaaS that sends mail as the domain for their records.
 Trap: apex A records with a 60-second TTL in CDN ranges are probably an alias record. Copying them as static A records works today and breaks when the CDN moves.
-Trap: NS records often have a 172800-second (48 hour) TTL. Move DNS at least that long before cutover, never on the night.
+Trap: NS records often have a 172800-second (48 hour) TTL. Run the full scan at T-14 and move DNS then, never on the night.
 Tip: `Resolve-DnsName` doesn't do CAA. Check CAA in a web DNS lookup if you issue certificates.
 
 ```powershell
@@ -145,7 +162,7 @@ Tip: for Cloudflare, make a token with DNS edit on that one zone only.
 .\Set-DomainDnsRecords.ps1 -Domain fabrikam.com -Provider Cloudflare -RecordsFile .\cutover-records.csv
 ```
 
-### 4. `Remove-SourceDomain.ps1` (1.1.0): release the domain
+### 4. `Remove-SourceDomain.ps1` (1.1.1): release the domain
 
 **What:** snapshots every recipient (addresses and LegacyExchangeDN) to `SourceRecipients-pre-<stamp>.csv` with `SnapshotStage=BeforeRelease`, lists blockers, moves sign-in names, primary addresses and aliases to onmicrosoft.com, and with `-RemoveDomain` removes the domain. Blocker classes:
 
@@ -171,8 +188,13 @@ Blockers are listed in `-WhatIf` and `-BlockersOnly` runs too. On a real run, de
 Trap: a snapshot taken after the addresses are stripped is useless. If no recipient holds the domain when it snapshots, the file is named `-post` and the script warns in red. Use the `-pre` file with Switch-TargetAddresses.
 Trap: `SyncLag` is normal for a few minutes after the sign-in change. Don't panic; let the retry run.
 
+When to run which: `-BlockersOnly` at T-7 and again at T-1 (read-only, no snapshot). `-SnapshotOnly` at T-1 day, so the readiness check has a file to read, and again on the night just before the rollback point; that night's `SourceRecipients-pre-<stamp>.csv` is the one Switch-TargetAddresses and 09 use. The `-RemoveDomain` run writes one more `-pre` file before it strips anything. See the [cutover runbook](../docs/Cutover-Runbook.md).
+
+Tip: it works against any tenant whose ID you give it. Pointed at the destination, it's the first step of the [rollback after the release](../docs/Cutover-Runbook.md#rollback).
+
 ```powershell
 .\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -BlockersOnly
+.\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -SnapshotOnly
 .\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -FixApplications -RemoveDomain
 ```
 
@@ -209,7 +231,7 @@ Trap: leavers who held an admin role can only be restored by a Global Administra
 Trap: a TXT on one name server and not the other means verification fails half the time. That's why `-WaitForDns` checks all of them, not your local resolver.
 Trap: verified in Entra doesn't mean Exchange knows yet. Wait a few minutes before DKIM.
 
-### 7. `Switch-TargetAddresses.ps1` (1.1.0): old addresses and X500s
+### 7. `Switch-TargetAddresses.ps1` (1.1.1): old addresses and X500s
 
 **What:** for each mapping row (and each list Copy-MailConfig created), adds the old addresses and an X500 from the old LegacyExchangeDN, and for migrated recipients makes the old address primary and the sign-in name. Before anything, it checks the snapshot is the `-pre` one (addresses on the domain and LegacyExchangeDN values present, at least 20% of mapped sources found) and stops otherwise; `-Force` overrides. It checks each old address against the destination: if a guest, mail user, contact or another mailbox holds it, that address is logged as `Conflict` and skipped. `-RemoveConflictingGuests` deletes conflicting guests (recycle bin) and retries.
 
@@ -262,7 +284,7 @@ Tip: keep one break-glass Global Administrator in the source unblocked until it 
 - **Guests hold old addresses.** Destination guest accounts had users' old addresses as proxies, so alias adds failed. The destination also hosted other companies with same-name mailboxes. Match by the mapping file only.
 - **Most DNS doesn't change.** MX, SPF and autodiscover are identical between tenants. Only the verification TXT and DKIM CNAMEs change. Skip the Skype records and never apply an apex CNAME to sharepoint.com.
 - **Block the old accounts, and check it worked.** Accounts with admin roles return 403 through Graph and need the admin centre. A loop printed "Blocked" even when the update failed: always try/catch and read back.
-- **APIs beat portals at night.** The GoDaddy API (back up with GET, then PUT per type and name) kept NS and SOA untouched and replaced the Parked record cleanly. Then delete the key.
+- **APIs beat portals at night.** Writing through the DNS provider's API (back up first, then write per type and name) kept NS and SOA untouched and replaced the provider's default parked record cleanly. Then delete the key.
 
 ## Requirements
 
@@ -276,6 +298,10 @@ Tip: keep one break-glass Global Administrator in the source unblocked until it 
 
 | Script | Version | Date | Change |
 | --- | --- | --- | --- |
+| README | 1.2.0 | 2026-11-10 | Order of play matches the canonical [cutover runbook](../docs/Cutover-Runbook.md): full scan and NS move at T-14, `-BlockersOnly` at T-7 and T-1, snapshot before every readiness run, `-FixApplications`, `-RemoveConflictingGuests`, 02 `-Apply` and 04 on the night |
+| Test-CutoverReadiness.ps1 | 1.0.1 | 2026-11-10 | Help only: snapshot name `SourceRecipients-pre-<stamp>.csv` and when to take it |
+| Remove-SourceDomain.ps1 | 1.1.1 | 2026-11-10 | Help only: snapshot name and timing |
+| Switch-TargetAddresses.ps1 | 1.1.1 | 2026-11-10 | Help only: `-SourceSnapshot` is the night's `SourceRecipients-pre-<stamp>.csv` |
 | Test-CutoverReadiness.ps1 | 1.0.0 | 2026-11-10 | New: go/no-go across both tenants and DNS |
 | Set-DomainDnsRecords.ps1 | 1.0.0 | 2026-11-10 | New: GoDaddy and Cloudflare zone writes with backup, from a records file or a full scan |
 | Block-SourceSignIn.ps1 | 1.0.0 | 2026-11-10 | New: block source accounts with read-back and admin role detection |

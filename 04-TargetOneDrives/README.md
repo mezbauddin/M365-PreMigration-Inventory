@@ -1,6 +1,6 @@
 # Request-TargetOneDrives
 
-**TL;DR:** A OneDrive doesn't exist until its owner signs in or an admin asks for one, and a migration tool can't copy into a OneDrive that isn't there. This script creates the OneDrives for everyone in your migration plan, in batches of 200, waits for them if you ask, and gives you a report with every URL. Run it as soon as people are licensed, then copy after cutover.
+**TL;DR:** A OneDrive doesn't exist until its owner signs in or an admin asks for one, and a migration tool can't copy into a OneDrive that isn't there. This script creates the OneDrives for everyone in your migration plan, in batches of 200, waits for them if you ask, and gives you a report with every URL. Run it as soon as people are licensed (on cutover night, straight after [02](../02-TargetMailboxes/) `-Apply`, step 13 of the [cutover runbook](../docs/Cutover-Runbook.md)), then copy after cutover.
 
 | | |
 | --- | --- |
@@ -66,6 +66,13 @@ Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
 
 **Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, connects Exchange Online as the one you named (for the address to sign-in look-up), and prints `Signed in as X to tenant Y`. On the live cutover this would have saved a confusing error at the worst moment.
 
+## Tips and traps
+
+- **Tip:** run it on the night with `-Wait -TimeoutMinutes 60` if you can stay up, so the morning report shows Created rather than Pending.
+- **Tip:** re-run it at T+1 before you build the OneDrive copy list. Anyone still Pending gets requested again; anyone Created is skipped.
+- **Trap:** run it before the sign-in names switch and the OneDrive gets an onmicrosoft.com URL that SharePoint then renames. That works, but your copy list must use the final URL, so build the list after cutover.
+- **Trap:** OneDrive sharing links and "Shared with me" don't come across with the files. See [What doesn't move](../docs/What-Doesnt-Move.md).
+
 ## Three ways to do it
 
 | Route | How |
@@ -87,6 +94,7 @@ Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
 
 | Version | Date | Change |
 | --- | --- | --- |
+| README | 2026-11-10 | Tips and traps, runbook timing. Script unchanged at 1.1.0 |
 | 1.1.0 | 2026-11-10 | `-AdminUpn`: connects Exchange Online as the named account (disconnecting any other) so sign-in names are looked up in the right tenant |
 | 1.0.1 | 2026-11-08 | Resolves mail addresses to sign-in names through Exchange Online. Matches new OneDrives by URL as well as owner |
 | 1.0.0 | 2026-11-08 | First release |
