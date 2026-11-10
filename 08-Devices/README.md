@@ -58,6 +58,20 @@ Needs `Microsoft.Graph.Authentication`, the Graph scopes `BitLockerKey.Read.All`
 
 **Trap:** that CSV opens every disk in the company. Move it into your password manager or an encrypted store the business controls, and delete the local copy. Every key read is audited in Entra ID, so tell the security team before you run it.
 
+### Copy-ProfileData.ps1
+
+Runs **on the laptop**, elevated. `-Prepare` before it leaves the old tenant saves the BitLocker key, join status, printers and profile list to `C:\MigrationBackup`. After the person has signed in once with their new account, the default mode copies Desktop, Documents, Downloads, Pictures, Videos, Music, Favorites, the old OneDrive folder(s), Outlook signatures and PST files, Sticky Notes and Edge/Chrome bookmarks from the old profile into the new one. The old profile is never changed, so it's your fallback.
+
+```powershell
+.\Copy-ProfileData.ps1 -Prepare                          # before leaving the old tenant
+.\Copy-ProfileData.ps1 -OldProfile jsmith -WhatIf       # after first sign-in with the new account
+.\Copy-ProfileData.ps1 -OldProfile jsmith
+```
+
+- **Tip:** it skips cloud-only OneDrive placeholders on purpose. Once the old account is blocked they can't download, and they arrive with the OneDrive copy anyway.
+- **Trap:** saved browser passwords are encrypted to the old account and can't be copied. Export them (Edge: Settings > Passwords > Export) while the person can still sign in to the old profile.
+- **Three ways:** ForensiT User Profile Wizard (paid, re-uses the old profile in place), this script (free, copies into the new profile), or copying the folders by hand in File Explorer as an admin.
+
 ## Per-device checklist
 
 Print one per device. Do it with the person beside you: they know what's on the desktop and which browser they use.
@@ -148,6 +162,11 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 | `BitLockerKeys-<tenant>-<date>\BitLockerKeys-<tenant>-<date>.csv` | Device name, owner, volume, key ID and **recovery key**. Most sensitive file in the toolkit |
 
 ## Changelog
+
+| Version | Date | Change |
+|---|---|---|
+| Copy-ProfileData 1.0.0 | 2026-11-10 | New: pre-move snapshot and old-to-new profile copy on the laptop |
+
 
 | Version | Date | Change |
 | --- | --- | --- |
