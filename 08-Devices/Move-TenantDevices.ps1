@@ -9,6 +9,12 @@
     net, leave the old tenant, join the new one silently, hand the person's existing profile to their new account).
     Every tenant-changing step has -WhatIf. Nothing is ever wiped, retired or reset.
 
+    Where to run what: options 1 to 3 (and 3 > move) on any admin PC, your own laptop included, because they only
+    sign in to tenants. Options 4 to 6 only on the device being moved. Never run option 4 on your own PC: it takes
+    the machine it runs on out of its tenant. Option 4 guards against that: pass -SourceTenantId and it stops if
+    this machine is joined anywhere else; leave it out and you must type the joined tenant's name exactly. It also
+    stops before leaving unless the local admin safety-net account exists, is enabled and is an administrator.
+
     Menu
       1  Build the enrolment package      admin PC   Signs in to the destination, gets a bulk enrolment token, builds
                                                       a .ppkg that joins laptops silently. One package per tenant,
@@ -32,6 +38,11 @@
 .PARAMETER Action
     Skip the menu: BuildPackage, CopyIntune, AutopilotCapture, AutopilotMove, MoveDevice, HandoverProfile, CopyProfile.
 
+.PARAMETER SourceTenantId
+    Source tenant ID (GUID). CopyIntune and AutopilotMove sign in to it. MoveDevice uses it as a safety check: if
+    this machine's dsregcmd TenantId is different, it stops before changing anything. Strongly recommended for
+    MoveDevice.
+
 .PARAMETER WorkFolder
     Where state, keys and reports go. Default C:\MigrationBackup (laptops) or .\DeviceMigration (admin PC).
 
@@ -43,11 +54,12 @@
     .\Move-TenantDevices.ps1 -Action CopyIntune -SourceTenantId <guid> -DestinationTenantId <guid> -WhatIf
 
 .EXAMPLE
-    .\Move-TenantDevices.ps1 -Action MoveDevice -PackagePath C:\MigrationBackup\contoso-join.ppkg
+    .\Move-TenantDevices.ps1 -Action MoveDevice -SourceTenantId <source-guid> -PackagePath C:\MigrationBackup\contoso-join.ppkg
+    # on the laptop being moved, never on your own PC
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -56,6 +68,13 @@
     Status  : Option 1's scripted token request uses the same sign-in flow Windows Configuration Designer uses, which
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
+    Changelog:
+      1.0.1  2026-11-10  MoveDevice safety guard: stops if -SourceTenantId is given and this machine is joined to a
+                         different tenant; without it, shows the joined tenant name and ID and requires the tenant
+                         name typed exactly (not just LEAVE). Stops before leaving unless the local admin exists, is
+                         enabled and is in Administrators (checked by well-known SID, so it works on any language).
+                         DeviceMove-*.csv gains a Status column for tools/Get-MigrationReport.ps1.
+      1.0.0  2026-11-10  First release.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -98,6 +117,23 @@ function Get-DsregStatus {
         if ($o -match "$k\s*:\s*(.+)") { $h[$k] = $Matches[1].Trim() } else { $h[$k] = '' }
     }
     [pscustomobject]$h
+}
+function Test-LocalAdminReady([string]$Name) {
+    # Returns $null when the safety-net account exists, is enabled and is a local administrator; otherwise the reason.
+    $u = Get-LocalUser -Name $Name -ErrorAction SilentlyContinue
+    if (-not $u) { return "Local admin '$Name' does not exist." }
+    if (-not $u.Enabled) { return "Local admin '$Name' exists but is disabled." }
+    $isAdmin = $false
+    try {
+        $isAdmin = [bool](Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop | Where-Object { $_.SID -eq $u.SID })
+    }
+    catch {
+        # Get-LocalGroupMember fails on groups holding orphaned SIDs; fall back to net localgroup
+        $grp = ((New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value -split '\\')[-1]
+        $isAdmin = [bool]((net localgroup "$grp" 2>$null) | Where-Object { ($_ -split '\\')[-1].Trim() -eq $Name })
+    }
+    if (-not $isAdmin) { return "Local admin '$Name' is not a member of the local Administrators group." }
+    $null
 }
 function Get-Profiles {
     Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.LocalPath -like "$env:SystemDrive\Users\*" } | ForEach-Object {
@@ -395,6 +431,15 @@ function Invoke-MoveDevice {
         if ($ds.DomainJoined -eq 'YES') { throw 'This PC is joined to an on-premises domain. This script is for Microsoft Entra joined devices only.' }
         if ($ds.AzureAdJoined -ne 'YES') { throw 'This PC is not Microsoft Entra joined. Nothing to leave.' }
         Write-Ok "Entra joined to $($ds.TenantName) ($($ds.TenantId))"
+        if ($SourceTenantId) {
+            if ($ds.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) {
+                throw "STOP: this machine is joined to $($ds.TenantName) ($($ds.TenantId)), not the source tenant $SourceTenantId. Nothing has changed. Option 4 only runs on a laptop being moved out of the source tenant; never on your own admin PC."
+            }
+            Write-Ok 'Joined tenant matches -SourceTenantId'
+        }
+        else {
+            Write-Warn2 "No -SourceTenantId given. Before leaving you will have to type the tenant name '$($ds.TenantName)' exactly. If this is your own PC, stop now."
+        }
         $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1); if ($free -lt 5) { Write-Warn2 "Only $free GB free on C:" } else { Write-Ok "$free GB free on C:" }
         if ($env:USERNAME -and (Get-Profiles | Where-Object { $_.Loaded -and $_.Account -like 'AzureAD\*' })) { Write-Warn2 'A Microsoft Entra user is signed in. Finish this stage, then restart and sign in as the local admin for stage 2.' }
 
@@ -420,10 +465,18 @@ function Invoke-MoveDevice {
             if ($PSCmdlet.ShouldProcess("Local admin '$LocalAdminName'", 'Create')) {
                 $pw = Read-Host "Password for the local admin '$LocalAdminName' (keep it in your password manager)" -AsSecureString
                 New-LocalUser -Name $LocalAdminName -Password $pw -PasswordNeverExpires -AccountNeverExpires -Description 'Tenant migration safety net' | Out-Null
-                Add-LocalGroupMember -Group 'Administrators' -Member $LocalAdminName
+                Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalAdminName
                 Write-Ok "Local admin '$LocalAdminName' created"
             }
         } else { Write-Ok "Local admin '$LocalAdminName' already exists" }
+        $whyNot = Test-LocalAdminReady $LocalAdminName
+        if ($whyNot) {
+            if ($WhatIfPreference) { Write-Warn2 "$whyNot A real run would stop here until it is fixed." }
+            else {
+                Set-State ([pscustomobject]@{ Stage = 'PreflightFailed'; Reason = $whyNot })
+                throw "STOP: $whyNot Without a working local admin there is no way back in after leaving. Fix it (Enable-LocalUser / Add-LocalGroupMember) and run again."
+            }
+        } else { Write-Ok "Local admin '$LocalAdminName' is enabled and an administrator. Test it: sign in as it once before stage 2." }
 
         Set-State ([pscustomobject]@{ Stage = 'Prepared'; OldProfile = $old.Folder; OldSid = $old.Sid; OldPath = $old.Path; OldTenantId = $ds.TenantId; OldTenantName = $ds.TenantName; OldDeviceId = $ds.DeviceId; Snapshot = $snap; LocalAdmin = $LocalAdminName; Package = $PackagePath })
         $state = Get-State
@@ -441,7 +494,23 @@ About to leave $($state.OldTenantName). After this:
   - sign in as .\$($state.LocalAdmin) and run this script again for stage 2
 "@ -ForegroundColor Yellow
         if ($PSCmdlet.ShouldProcess("This laptop", "Leave tenant $($state.OldTenantName)")) {
-            if ((Read-Choice 'Type LEAVE to continue, or N to stop' @('LEAVE', 'N', 'n')) -ne 'LEAVE') { return }
+            # Safety guard: re-check live, just before the point of no return
+            $live = Get-DsregStatus
+            if ($live.AzureAdJoined -ne 'YES') { throw 'This PC is no longer Microsoft Entra joined. Check dsregcmd /status before going further.' }
+            if ($state.OldTenantId -and ($live.TenantId -ne $state.OldTenantId)) { throw "STOP: joined to $($live.TenantName) ($($live.TenantId)) now, but stage 1 recorded $($state.OldTenantId). Delete $script:StateFile and start again." }
+            $whyNot = Test-LocalAdminReady $state.LocalAdmin
+            if ($whyNot) { throw "STOP: $whyNot Not leaving the tenant without another way in." }
+            if ($SourceTenantId) {
+                if ($live.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) { throw "STOP: this machine is joined to $($live.TenantName) ($($live.TenantId)), not the source tenant $SourceTenantId. Nothing has changed." }
+                if ((Read-Choice 'Type LEAVE to continue, or N to stop' @('LEAVE', 'N', 'n')) -ne 'LEAVE') { return }
+            }
+            else {
+                if (-not $live.TenantName) { throw 'dsregcmd shows no tenant name to confirm. Run again with -SourceTenantId <source-guid>.' }
+                Write-Host "This machine is joined to: $($live.TenantName)  ($($live.TenantId))" -ForegroundColor Yellow
+                Write-Host 'If that is not the source tenant you are migrating from, or this is your own PC, type N.' -ForegroundColor Yellow
+                $typed = Read-Host "Type the tenant name exactly ($($live.TenantName)) to leave it, or N to stop"
+                if ($typed.Trim() -cne $live.TenantName) { Write-Warn2 'Name did not match. Nothing changed.'; return }
+            }
             dsregcmd /leave | Out-Null
             Start-Sleep 5
             $after = Get-DsregStatus
@@ -546,7 +615,7 @@ function Invoke-HandoverProfile {
         Write-Host 'Next: the person signs in. OneDrive, Outlook and Teams will ask for their new sign-in once; files, desktop and settings are already there.' -ForegroundColor Cyan
         Write-Host 'Saved browser passwords and Windows Hello are tied to the old account and need setting up again.' -ForegroundColor Yellow
         $rep = Join-Path $WorkFolder "DeviceMove-$env:COMPUTERNAME-$script:Stamp.csv"
-        [pscustomobject]@{ Computer = $env:COMPUTERNAME; OldTenant = $state.OldTenantName; NewTenant = (Get-DsregStatus).TenantName; Person = $new.Account; ProfilePath = $old.Path; Parked = $parked; Method = 'Handover'; When = Get-Date } | Export-Csv $rep -NoTypeInformation -WhatIf:$false
+        [pscustomobject]@{ Computer = $env:COMPUTERNAME; Status = 'Done'; OldTenant = $state.OldTenantName; NewTenant = (Get-DsregStatus).TenantName; Person = $new.Account; ProfilePath = $old.Path; Parked = $parked; Method = 'Handover'; When = Get-Date } | Export-Csv $rep -NoTypeInformation -WhatIf:$false
         Add-State 'Stage' 'Done'; Add-State 'Report' $rep
         Invoke-BitLockerBackup
     }
@@ -585,11 +654,11 @@ if ($Action -eq 'Menu') {
 
  Move-TenantDevices  (state on this machine: $($st.Stage))
  -------------------------------------------------------------
-  Admin PC
+  Any admin PC (your own laptop is fine)
    1  Build the enrolment package for the destination tenant
    2  Copy Intune configuration from source to destination
    3  Autopilot: capture this device's hash / move hashes
-  Laptop (run as administrator)
+  Laptop being moved only (run as administrator; never option 4 on your own PC)
    4  Move this laptop to the new tenant (staged, re-run after each restart)
    5  Hand the old profile to the new account (after first sign-in)
    6  Copy profile data into the new profile instead (fallback)

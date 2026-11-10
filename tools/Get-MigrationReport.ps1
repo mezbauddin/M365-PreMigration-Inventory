@@ -29,6 +29,8 @@
       DriveCopy-Download-*.csv, DriveCopy-Upload-*.csv   copy-options C Copy-DriveViaGraph
       DriveCopyList-*.csv            copy-options New-DriveCopyList
       Validation-*.csv               09 Test-TargetTenant
+      IntuneImport-*.csv             08 Move-TenantDevices option 2 (Intune configuration import)
+      DeviceMove-*.csv               08 Move-TenantDevices option 5, one per laptop (newest of each laptop is used)
     Plus any other CSV in the folder with a Status or Result column. Files holding passwords are never read.
 
 .PARAMETER Folder
@@ -57,12 +59,17 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: PowerShell 5.1 or 7. No modules, no sign-in.
     The HTML holds names and addresses from the reports. Treat it like the CSVs: keep it off shared drives.
+    Changelog:
+      1.0.2  2026-11-10  Knows IntuneImport-*.csv and DeviceMove-*.csv (08 Move-TenantDevices). DeviceMove reports are
+                         kept one per laptop, so every moved laptop shows, not just the newest.
+      1.0.1  2026-11-10  Knows TargetResourceMailboxes, DecommissionReadiness and TargetMailUsers-Report. Skip and Info count as done.
+      1.0.0  2026-11-10  First release.
 #>
 [CmdletBinding()]
 param(
@@ -97,10 +104,12 @@ $known = [ordered]@{
     'DriveCopy-Upload'       = 'C Copy-DriveViaGraph -Upload'
     'DriveCopyList'          = 'New-DriveCopyList'
     'Validation'             = '09 Test-TargetTenant'
+    'IntuneImport'           = '08 Move-TenantDevices (Intune import)'
+    'DeviceMove'             = '08 Move-TenantDevices (laptop moved)'
 }
 $okValues = 'Done', 'Skip', 'SKIP', 'Info', 'INFO', 'Exists', 'OK', 'WhatIf', 'Successful', 'Success', 'Pass', 'Created', 'Added', 'Set', 'Already existed', 'Removed', 'Requested', 'Copy', 'Completed',
              'Info', 'Unchanged', 'Blocked', 'AlreadyBlocked'
-$preferred = 'Object', 'Source', 'User', 'Name', 'Identity', 'Address', 'PrimarySmtpAddress', 'Domain', 'Area', 'Check', 'Action',
+$preferred = 'Computer', 'Person', 'Object', 'Source', 'User', 'Name', 'Identity', 'Address', 'PrimarySmtpAddress', 'Domain', 'Area', 'Check', 'Action',
              'Type', 'Stage', 'Status', 'Result', 'Expected', 'Actual', 'Value', 'Destination', 'DestinationSite', 'DestinationFolder',
              'Errors', 'Warnings', 'Detail', 'Note', 'Reason', 'Fix', 'Message'
 
@@ -125,7 +134,9 @@ $candidates = foreach ($f in $files) {
     $header = Get-Header $f.FullName
     $statusCol = @('Status', 'Result') | Where-Object { $header -contains $_ } | Select-Object -First 1
     if ($isKnown -or $statusCol) {
-        [pscustomobject]@{ File = $f; Type = $type; Source = $(if ($isKnown) { $known[$type] } else { 'Other report' }); StatusColumn = $statusCol }
+        # One report per laptop for DeviceMove-<computer>-<stamp>.csv; one per type for everything else
+        $group = if ($type -eq 'DeviceMove') { $f.BaseName -replace '-\d{8}(-\d{4,6})?$', '' } else { $type }
+        [pscustomobject]@{ File = $f; Type = $type; Group = $group; Source = $(if ($isKnown) { $known[$type] } else { 'Other report' }); StatusColumn = $statusCol }
     }
 }
 $candidates = @($candidates)
@@ -134,7 +145,7 @@ if (-not $candidates) { Write-Host "No toolkit reports found in $Folder$(if (-no
 # Newest by write time, then by the date stamp in the name (copied files can share a write time).
 $byAge = @{ e = { $_.File.LastWriteTime } }, @{ e = { $_.File.Name } }
 $chosen = if ($All) { $candidates }
-          else { $candidates | Group-Object Type | ForEach-Object { $_.Group | Sort-Object $byAge -Descending | Select-Object -First 1 } }
+          else { $candidates | Group-Object Group | ForEach-Object { $_.Group | Sort-Object $byAge -Descending | Select-Object -First 1 } }
 $chosen = @($chosen | Sort-Object (@{ e = { $_.Type } }, $byAge[0], $byAge[1]))
 
 # ------------------------------------------------------------ read each one

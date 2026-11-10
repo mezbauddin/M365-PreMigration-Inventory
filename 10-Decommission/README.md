@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 (Get-DecommissionReadiness) |
+| Version | 1.0.1 (Get-DecommissionReadiness 1.0.0) |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -66,6 +66,7 @@ Fill in the dates on day one. Work back from the **licence end date** (the scrip
 | T+14 | | Lead | Export anything to keep that didn't move: Purview eDiscovery, a search per person or mailbox, export to PST. Inactive mailboxes and anything on hold first. Store the exports where the business owner agreed, and record where | [ ] |
 | T+14 | | Lead | Mail flow WARNs: find whatever still sends to or from the source (scanners, website forms, apps with an old onmicrosoft.com address) and repoint it | [ ] |
 | T+30 | | Lead | Holds released by their owner, or exported. Then remove licences from users. Unlicensed OneDrives start their timer now | [ ] |
+| T+30 | | Device support | Every Entra joined laptop moved with [08 Move-TenantDevices.ps1](../08-Devices/) (state Done on each). Then **delete** the old device objects in the source: Entra ID devices, Intune managed devices and Autopilot registrations (option 3 > move removes those). Delete only; never wipe or retire | [ ] |
 | T+30 | | Lead | Turn off recurring billing on every subscription (admin centre, Billing, Your products, the subscription, Recurring billing). Or cancel, if the agreement allows | [ ] |
 | Licence end minus 14 days | | Lead and business owner | **Decide on archived and unlicensed OneDrives**, one by one: already copied (nothing to do), relicense the owner and copy (reactivates an archived one free in 24 to 48 hours), eDiscovery export, or pay-as-you-go reactivation. Record each decision | [ ] |
 | Licence end minus 7 days | | Lead | Final readiness run. Only the WARNs the business owner accepted in writing should remain | [ ] |
@@ -93,6 +94,7 @@ With Microsoft's default settings, a OneDrive whose owner has no licence becomes
 - **Trap: admin-role accounts can't be blocked by script.** Graph refuses to change accounts that hold privileged admin roles unless you hold a higher role. Block them in the admin centre, last, and keep one break-glass account until the very end.
 - **Trap: blocking isn't instant.** Existing sessions keep working until their tokens expire. Revoke sessions as well if it matters.
 - **Trap: holds outlive licences.** Removing a licence or deleting a user doesn't release a litigation or retention hold; the data becomes an inactive mailbox. Deleting the tenant does release it. Get the hold owner's decision in writing.
+- **Trap: wipe and retire reach real laptops.** A laptop that has left the source tenant can still have a pending Intune action waiting for it if it was ever offline when the action was sent, and a wipe or retire sent to the wrong record hits a laptop someone is using in the destination. For old device objects, delete the record only, never wipe or retire. Check `Get-DeviceInventory.ps1` against the destination first, so you know every laptop has arrived.
 - **Trap: deleting users deletes their OneDrive** after the retention period. Copy or export first.
 - **Trap: a renewal date you didn't see.** Annual subscriptions renew automatically. A CSP subscription is cancelled through the partner, not the admin centre. Find out which kind you have at T+1.
 - **Trap: message trace reads 5,000 rows at most.** If the script says so, look at the rest in the Exchange admin centre before you call the source quiet.
@@ -104,4 +106,5 @@ With Microsoft's default settings, a OneDrive whose owner has no licence becomes
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.1 | 2026-11-10 | Checklist: delete old device objects in the source once every laptop has moved with 08; never wipe or retire |
 | 1.0.0 | 2026-11-10 | First release of `Get-DecommissionReadiness.ps1`: sign-in, licences and renewal dates, domains, holds, mailboxes, mail flow and unlicensed OneDrives, PASS and WARN. Dated checklist from T+1 to tenant deletion. Replaces the planning page |

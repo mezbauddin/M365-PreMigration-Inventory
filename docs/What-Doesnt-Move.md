@@ -1,11 +1,11 @@
 # What doesn't move
 
-**TL;DR:** Mail, files, SharePoint and Teams channel content move well with any of the three copy options. A long list of other things doesn't move at all, or moves badly: Teams chats, Planner, Forms, flows, apps, reports, Loop, recordings, Bookings, phone systems, public folders, inactive mailboxes, single sign-on, encrypted content, rules and signatures, Outlook profiles, calendar subscriptions and phones. This page lists each one, what goes wrong, who rebuilds it, and three ways to deal with it (paid tool, Microsoft native, by hand). Walk the business owner through it during discovery, not on the Monday after cutover.
+**TL;DR:** Mail, files, SharePoint and Teams channel content move well with any of the three copy options. A long list of other things doesn't move at all, or moves badly: Teams chats, Planner, Forms, flows, apps, reports, Loop, recordings, Bookings, phone systems, public folders, inactive mailboxes, single sign-on, encrypted content, rules and signatures, Outlook profiles, calendar subscriptions, Intune and Windows devices, and phones. This page lists each one, what goes wrong, who rebuilds it, and three ways to deal with it (paid tool, Microsoft native, by hand). Walk the business owner through it during discovery, not on the Monday after cutover.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -51,6 +51,7 @@ The question that sinks the post-cutover week isn't "where's my email?" It's "wh
 | [Inbox rules, auto-replies, signatures](#inbox-rules-auto-replies-and-signatures) | Depends on the tool | Each person, with a checklist |
 | [Outlook profiles and cached credentials](#outlook-profiles-and-cached-credentials) | n/a, on the device | Day-one support |
 | [Shared calendar subscriptions](#shared-calendar-subscriptions) | No | Each person |
+| [Intune and Windows devices](#intune-and-windows-devices) | Policies yes, with [08](../08-Devices/) option 2. App installers, browser passwords and Windows Hello no | IT for Intune; each person for passwords and Hello |
 | [Mobile devices](#mobile-devices) | n/a, on the device | Each person, with support |
 
 ## The owner-recreates checklist
@@ -281,6 +282,26 @@ Send this to every owner at T-7. One line per item they own.
 - **Microsoft native:** `Get-MailboxFolderPermission <mailbox>:\Calendar` in the source to record who had what; `Add-MailboxFolderPermission` in the destination. People re-add with Outlook, Add calendar, From directory.
 - **By hand:** a list of who looks at whose calendar, from the team. Then reshare.
 
+## Intune and Windows devices
+
+**What moves:** Intune configuration, with [08 Move-TenantDevices.ps1](../08-Devices/) option 2: device configuration, settings catalog, compliance, PowerShell scripts, remediations and Autopilot profiles, with assignments mapped to destination groups by name. The person's Windows profile stays on the laptop and option 5 hands it to their new account, so files, desktop and settings stay where they were.
+
+**What doesn't move:**
+
+- **Win32 and LOB app installers.** Option 2 exports app metadata only. The `.intunewin` and `.msi` files must be re-uploaded in the destination; `mobileApps.json` from the export is your list.
+- **Saved browser passwords.** They're encrypted to the old Windows account and can't be read by the new one, even after the profile handover.
+- **Windows Hello.** PIN, face and fingerprint belonged to the source account. Each person sets them up again on first sign-in.
+- **Anything with the same name already in the destination.** Option 2 skips it rather than overwrite it, and says so in its report.
+
+**Owner recreates:** IT re-uploads the app installers and checks each assignment. Each person exports browser passwords while they can still sign in to the old account, and sets up Windows Hello again.
+
+- **Paid tool:** Intune migration tools copy policies and some can repackage apps. None move browser passwords or Hello.
+- **Microsoft native:** export and import policies through Microsoft Graph, by hand or with Microsoft's sample scripts. Apps re-uploaded in the Intune admin centre.
+- **By hand:** rebuild the policies in the destination from screenshots. Fine for five policies; slow and error-prone for fifty.
+
+**Trap:** check whether the source used Intune at all before you plan this. Many small tenants never did, and then there's nothing to move.
+**Tip:** tell people about browser passwords at T-7, in the heads-up email. Edge: Settings, Passwords, Export. After the move it's too late.
+
 ## Mobile devices
 
 **What doesn't move:** the work account on each phone and tablet: Outlook mobile, Teams, OneDrive, the built-in mail app's account, Authenticator registrations for MFA, and any Intune enrolment or app protection policy from the source.
@@ -297,4 +318,5 @@ Send this to every owner at T-7. One line per item they own.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | Intune and Windows devices: what option 2 of `Move-TenantDevices.ps1` moves, and what it doesn't (app installers, browser passwords, Windows Hello) |
 | 1.0.0 | 2026-11-10 | First release: nineteen things copy tools don't move, with owner-recreates checklist and three ways for each |

@@ -5,14 +5,14 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
 | Script | Version | Changes anything? |
 | --- | --- | --- |
 | [`Test-ModuleHealth.ps1`](Test-ModuleHealth.ps1) | 1.0.0 | No. Only with `-Fix` (installs Graph modules for the current user) |
-| [`Get-MigrationReport.ps1`](Get-MigrationReport.ps1) | 1.0.0 | No. Writes an HTML file with `-Html` |
+| [`Get-MigrationReport.ps1`](Get-MigrationReport.ps1) | 1.0.2 | No. Writes an HTML file with `-Html` |
 
 Part of my [M365 tenant-to-tenant migration toolkit](../README.md). Where each tool fits in the day-by-day order is in the [cutover runbook](../docs/Cutover-Runbook.md): Test-ModuleHealth at T-14 on the cutover PC, Get-MigrationReport at T-1 and after every step on the night.
 
@@ -95,6 +95,7 @@ Every toolkit script writes a report: `MailConfig-Import-*`, `SwitchTargetAddres
 - Counts rows by Status or Result.
 - Prints every row that isn't Done, Exists, OK, WhatIf, Successful, Pass, Created, Added, Set or similar, with the useful columns picked out (Object, Source, Status, Detail, Reason, Fix and so on). ShareGate rows with errors are shown even when the result says Successful.
 - `TargetDomainDns-*.csv` has no status column, so all its rows are shown: they're the records to publish.
+- Devices from [08](../08-Devices/): `IntuneImport-*.csv` (option 2 of `Move-TenantDevices.ps1`; rows Listed only are app installers to re-upload, Problem rows need a look) and `DeviceMove-*.csv`, one per laptop. Every laptop's newest report is kept, so the summary shows each one. Copy them back from `C:\MigrationBackup` on each laptop to your report folder.
 - `-Html` writes `MigrationReport-<date>.html`, one self-contained page, no external files.
 
 ### How to run it
@@ -129,5 +130,6 @@ Every toolkit script writes a report: `MailConfig-Import-*`, `SwitchTargetAddres
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.0.2 | 2026-11-10 | `Get-MigrationReport.ps1` 1.0.2: knows `IntuneImport-*` and `DeviceMove-*` from 08 `Move-TenantDevices.ps1`, one row per laptop. Version table corrected |
 | 1.0.1 | 2026-11-10 | README: version and release rows, link to the cutover runbook. Scripts unchanged (both still 1.0.0) |
 | 1.0.0 | 2026-11-10 | First release: Test-ModuleHealth and Get-MigrationReport, from lessons on a live cutover |

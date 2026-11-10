@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.2.0 |
+| Version | 1.3.0 |
 | Licence | MIT |
 | Came from | A real small-business migration: mailboxes with large archives, SharePoint, Teams, OneDrive and more than one domain |
 
@@ -29,7 +29,9 @@ flowchart LR
     A & S & N --> M[Rebuild config<br/>05 · 06]
     M --> X[Cut over domain<br/>07 · 02 -Apply · 04]
     X --> V[Validate<br/>09]
-    X --> DV[Rejoin devices<br/>08]
+    M --> IC[Copy Intune config<br/>08 option 2, if used]
+    IC --> DV
+    X --> DV[Move devices<br/>08 Move-TenantDevices]
     V --> R[Decommission source<br/>10]
     DV --> R
     T[tools: module health,<br/>migration report] -.-> B & M & X & V
@@ -48,7 +50,7 @@ flowchart LR
 | Rebuild | [06 Groups, Teams and sites](06-GroupsTeamsSites/) | Every Microsoft 365 group, Team and SharePoint site exported. Groups created in the destination on your domain, with owners and members, before the copy | Destination on import. `-WhatIf` |
 | Copy | [New-DriveCopyList](copy-options/#building-the-onedrive-copy-list-new-drivecopylistps1) | Builds the OneDrive copy list for B and C: leavers into one folder each in an archive library, staff into their new OneDrive, archived OneDrives marked Skip. Creates the folders with `-CreateFolders` | Only with `-CreateFolders` |
 | Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, add in destination first, release from source, verify, old addresses with X500s, sign-in names, temporary passwords. Plus `Test-CutoverReadiness` (go/no-go), `Export-DomainDns -FullScan` and `Set-DomainDnsRecords` (moving DNS hosting), `Add-TargetDomain -WaitForDns`, and `Block-SourceSignIn` | Both tenants, in order. `-WhatIf` |
-| Cut over | [08 Devices](08-Devices/) | Rejoin Entra-joined laptops to the destination: back up the profile, leave, join, Intune, sign the apps back in. [`Get-DeviceInventory`](08-Devices/Get-DeviceInventory.ps1) lists what you'll touch; [`Export-BitLockerKeys`](08-Devices/Export-BitLockerKeys.ps1) saves recovery keys before anything leaves the source | Read-only scripts. The rejoin is by hand |
+| Cut over | [08 Devices](08-Devices/) | Moves Entra joined laptops to the destination and keeps each person's Windows profile. [`Move-TenantDevices`](08-Devices/Move-TenantDevices.ps1) is one menu: build the bulk enrolment package, copy Intune configuration between tenants, move Autopilot hashes, then a staged move on each laptop that hands the old profile to the new account, with rollback. [`Get-DeviceInventory`](08-Devices/Get-DeviceInventory.ps1) lists what you'll touch; [`Export-BitLockerKeys`](08-Devices/Export-BitLockerKeys.ps1) saves recovery keys before anything leaves the source; [`Copy-ProfileData`](08-Devices/Copy-ProfileData.ps1) is the copy fallback | Destination (Intune, Autopilot) and each laptop. `-WhatIf`. Nothing is wiped |
 | Validate | [09 Validation](09-Validation/) | Checks the destination against the inventory, plan and mapping: types, licences, archives, item counts, addresses, X500s, OneDrives, list members, the password-change flag, and Conditional Access that will block your test sign-in. Pass, warn and fail report | No |
 | Decommission | [10 Decommission](10-Decommission/) | Block source sign-in, final incrementals, export and retain, unlicensed OneDrives, remove licences, close the tenant. [`Get-DecommissionReadiness`](10-Decommission/Get-DecommissionReadiness.ps1) tells you what still stops you | Read-only script. The closing steps are deliberate and by hand |
 | Any time | [tools](tools/) | `Test-ModuleHealth` finds the Graph module version clash before it stops a script. `Get-MigrationReport` reads every report CSV and shows what still needs a look, on screen or as one HTML page | No (`-Fix` installs modules) |
@@ -85,7 +87,7 @@ The short version. The day-by-day version, with every flag, is the [cutover runb
 11. On cutover night, follow the runbook: add the domain to the destination and publish its TXT, snapshot, readiness, release with `-FixApplications`, verify, **02 -Apply** to license and convert, **Switch-TargetAddresses**, then **04** so the OneDrives exist.
 12. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover, with the HTML from **tools/Get-MigrationReport**.
 13. The day after, **07 Block-SourceSignIn**, then rebuild the mapping with **02b** before any incremental. Copy OneDrive from the list **New-DriveCopyList** builds, now sign-in names are final.
-14. Rejoin devices with **08**, and work through the owner-recreates list in [What doesn't move](docs/What-Doesnt-Move.md).
+14. Devices with **08 Move-TenantDevices**. At T-7, check whether the source uses Intune at all; if it does, copy its configuration with option 2 (`-WhatIf` first) before any laptop moves. After cutover, build the enrolment package (option 1) on your admin PC, then move each laptop in stages with option 4 and `-SourceTenantId`, on that laptop only, and hand its old profile over with option 5. Finish before the source licences end. Then work through the owner-recreates list in [What doesn't move](docs/What-Doesnt-Move.md).
 15. When the business signs off, close the source with **10**, never before the final incrementals or the licence overlap ends.
 
 **tools** runs alongside all of it: **Test-ModuleHealth** before you start and on the cutover PC, **Get-MigrationReport** after every step on the night.
@@ -102,7 +104,7 @@ One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 0
 
 **The output is sensitive.** The CSVs hold names, addresses, permissions and, from some steps, temporary passwords. The `.gitignore` keeps them out of commits. Keep them out of email and shared drives too.
 
-**What this doesn't move:** Teams chats, Planner, Forms, Power Platform, Bookings, Teams Phone, Intune policies, Conditional Access and other tenant settings. Rebuild those deliberately; don't copy a mess. [What doesn't move](docs/What-Doesnt-Move.md) lists each one, with the owner-recreates checklist and three ways to handle it.
+**What this doesn't move:** Teams chats, Planner, Forms, Power Platform, Bookings, Teams Phone, Conditional Access and other tenant settings. Intune policies do move, with 08 option 2; Win32 and LOB app installers, saved browser passwords and Windows Hello don't. Rebuild those deliberately; don't copy a mess. [What doesn't move](docs/What-Doesnt-Move.md) lists each one, with the owner-recreates checklist and three ways to handle it.
 
 ## Disclosure
 
@@ -116,6 +118,7 @@ This repo used to be called M365-PreMigration-Inventory. GitHub redirects the ol
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.3.0 | 2026-11-10 | 08 is now scripted end to end: `Move-TenantDevices` (package, Intune configuration copy, Autopilot, staged laptop move, profile handover) in the parts table, diagram and "How the parts fit". Intune policies no longer listed as not moving |
 | 1.2.0 | 2026-11-10 | Diagram and "How the parts fit" include 02b, 03, 08, 10 and tools. Points at the cutover runbook as the canonical order. Readiness at T-1 plus a final run on the night. What doesn't move added |
 | 1.1.0 | 2026-11-10 | Lessons from a live cutover, tools, 07 readiness and DNS scripts |
 | 1.0.0 | 2026-11-09 | First release |

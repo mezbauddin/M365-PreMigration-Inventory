@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.1 |
+| Version | 1.1.0 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -21,6 +21,7 @@ If you read nothing else:
 4. Every script that changes a tenant takes `-AdminUpn`. Use it.
 5. One version of every Microsoft.Graph module, and a fresh PowerShell window per task.
 6. After cutover, rebuild the user mapping before any OneDrive copy or incremental.
+7. Check whether the source uses Intune at all before you plan the devices, and hand each person's old Windows profile over rather than copying it.
 
 ## Before the night
 
@@ -200,9 +201,43 @@ If you read nothing else:
 
 **Tip:** after an acquisition, treat the old company's mail flow rules as history, not configuration. The business owner decides which, if any, still matter. The same goes for forwarding to outside addresses.
 
+## Devices
+
+### The source had no Intune at all
+
+| | |
+| --- | --- |
+| What happened | The device plan assumed Intune policies, compliance and Autopilot to move. The source had laptops Entra joined by hand and nothing in Intune |
+| Impact | Half a day planning a policy copy that had nothing to copy, and no compliance data to tell which laptops were in use |
+| Fix | Checked the source first, planned around the destination's own Intune: MDM user scope on, laptops enrol when they join |
+| Now handled by | [08 Get-DeviceInventory.ps1](../08-Devices/) Intune columns; [08 Move-TenantDevices.ps1](../08-Devices/) option 2 reports zero and moves on |
+
+**Tip:** look before you plan. Intune admin centre, Devices, All devices, in the source. Empty means option 2 is a five-minute job.
+
+### Keep the old profile, hand it over
+
+| | |
+| --- | --- |
+| What happened | Joining the destination gave each person a new, empty Windows profile. Copying files across left desktop layout, app settings and taskbar behind |
+| Impact | People spent their first morning rebuilding their laptop instead of working |
+| Fix | Pointed the new account at the old profile folder and gave it ownership, files and registry hives. The empty profile was parked, not deleted, as the way back |
+| Now handled by | [08 Move-TenantDevices.ps1](../08-Devices/) option 5, with rollback; option 6 (`Copy-ProfileData.ps1`) only as the fallback |
+
+**Trap:** don't delete the old profile to "tidy up" before the handover. It is the person's data and your rollback.
+
+### BitLocker keys missing from Entra ID
+
+| | |
+| --- | --- |
+| What happened | The BitLocker export found Entra joined laptops with no recovery key in the tenant at all. BitLocker was on; the key had never been backed up |
+| Impact | A recovery prompt after the move would have meant a dead disk |
+| Fix | Read the key on each device with `manage-bde -protectors -get C:` before it left, and backed it up to the destination after the join |
+| Now handled by | [08 Export-BitLockerKeys.ps1](../08-Devices/) lists devices with no key; `Move-TenantDevices.ps1` stage 1 captures it on the device and backs it up to the destination at the end |
+
 ## Changelog
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | Devices: no Intune in the source, hand the profile over, BitLocker keys missing from Entra ID |
 | 1.0.1 | 2026-11-10 | Readiness and blocker steps match the cutover runbook. Job details generalised |
 | 1.0.0 | 2026-11-10 | First version, written the morning after cutover |

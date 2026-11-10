@@ -1,11 +1,11 @@
 # 08 Device rejoin
 
-**TL;DR:** A Windows laptop joined to the source tenant's Entra ID has to leave it and join the destination, and every app on it has to sign in again. `Get-DeviceInventory.ps1` tells you which devices need it, who uses them and whether Intune manages them. `Export-BitLockerKeys.ps1` saves every BitLocker recovery key before the source can lose them. The printable checklist below takes one device from "still in the old tenant" to "working in the new one" in 45 to 60 minutes without losing anyone's files. Laptops joined to an on-premises Active Directory are unaffected by the tenant move. Examples use fabrikam.com as the source and contoso.com as the destination.
+**TL;DR:** A Windows laptop joined to the source tenant's Entra ID has to leave it and join the destination, and every app on it has to sign in again. `Get-DeviceInventory.ps1` tells you which devices need it, who uses them and whether Intune manages them. `Export-BitLockerKeys.ps1` saves every BitLocker recovery key before the source can lose them. `Move-TenantDevices.ps1` is one menu for the rest: build the bulk enrolment package, copy Intune configuration, move Autopilot hashes, then move each laptop in stages and hand the person's existing profile to their new account. The printable checklist below takes one device from "still in the old tenant" to "working in the new one" in 45 to 60 minutes without losing anyone's files. Laptops joined to an on-premises Active Directory are unaffected by the tenant move. Examples use fabrikam.com as the source and contoso.com as the destination.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 (Get-DeviceInventory, Export-BitLockerKeys) |
+| Version | 1.2.1 (Move-TenantDevices 1.0.1, Copy-ProfileData 1.0.0, Get-DeviceInventory 1.0.0, Export-BitLockerKeys 1.0.0) |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -62,6 +62,16 @@ Needs `Microsoft.Graph.Authentication`, the Graph scopes `BitLockerKey.Read.All`
 
 One interactive script for the whole device side. Run it with no parameters and pick from the menu. Options 1 to 3 run on your admin PC; 4 to 6 run on each laptop as administrator. Every step that changes a tenant has `-WhatIf`, and nothing is ever wiped, retired or reset.
 
+#### Where to run what
+
+| Options | Run on | Why |
+|---|---|---|
+| 1, 2, 3 > move | Any admin PC. Your own laptop is fine | They only sign in to tenants through Microsoft Graph. Nothing on the PC itself changes |
+| 3 > capture, 4, 5, 6 | Only the device being moved, as administrator | They read and change that machine: its tenant join, local accounts and profiles |
+| 4 | **Never on your own PC** | Option 4 takes the machine it runs on out of its tenant. On your admin laptop that means you, not the user, lose your work account sign-in |
+
+Option 4 has a guard for exactly that mistake. Pass `-SourceTenantId` and stage 1 stops, before changing anything, if `dsregcmd /status` shows the machine joined to any other tenant. Leave it out and the script shows the joined tenant's name and ID and makes you type the name exactly before it leaves; `LEAVE` alone won't do. Either way it also refuses to leave unless the local admin safety-net account exists, is enabled and is in the local Administrators group.
+
 | Option | Where | What it does |
 |---|---|---|
 | 1 Build the enrolment package | Admin PC | Signs in to the destination, gets a bulk enrolment token and builds a `.ppkg` that joins laptops silently. One per tenant, valid up to 180 days. Falls back to guiding you through Windows Configuration Designer |
@@ -75,8 +85,8 @@ One interactive script for the whole device side. Run it with no parameters and 
 # Admin PC, once per destination
 .\Move-TenantDevices.ps1                      # 1, then 2 (with -WhatIf first), then 3 > move
 
-# Each laptop, as administrator, re-run after each restart until it says Done
-.\Move-TenantDevices.ps1 -Action MoveDevice -PackagePath C:\MigrationBackup\contoso-join.ppkg
+# Each laptop being moved (never your own PC), as administrator, re-run after each restart until it says Done
+.\Move-TenantDevices.ps1 -Action MoveDevice -SourceTenantId <source-guid> -PackagePath C:\MigrationBackup\contoso-join.ppkg
 ```
 
 **What the person sees:** their laptop restarts twice, they sign in once with their new email and password, you run option 5, and their next sign-in has their desktop, files, settings and apps exactly as they were. OneDrive, Outlook and Teams ask for the new sign-in once. Saved browser passwords and Windows Hello are tied to the old account and need setting up again.
@@ -86,6 +96,7 @@ One interactive script for the whole device side. Run it with no parameters and 
 - **Trap:** the bulk token request in option 1 uses the same undocumented sign-in flow as Windows Configuration Designer. If Microsoft changes it, the script opens WCD and tells you what to click. Either way you end up with a `.ppkg`.
 - **Trap:** the `.ppkg` joins any device to the tenant. Keep it off shared drives and delete it when the move is done.
 - **Trap:** run stages 2 and 5 from the local admin, never from the person's account. A loaded profile can't be handed over.
+- **Trap:** option 4 on your own admin PC removes it from its tenant. Always pass `-SourceTenantId`, and if the script stops with "joined to ... not the source tenant", you're on the wrong machine.
 - **Three ways:** ForensiT User Profile Wizard (paid, polished, does the handover for you), this script (free, same handover technique), or by hand (leave, join, copy the files with Explorer and lose the settings).
 
 ### Copy-ProfileData.ps1
@@ -178,7 +189,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 - **Trap: a new profile.** Joining the destination creates a new Windows profile for the new account. The old one stays on disk but the person won't see it. Copy what OneDrive didn't hold, or use a profile tool.
 - **Trap: cached credentials hide the problem.** Blocking source sign-in doesn't stop a device logging on with cached credentials until the cache expires. Don't treat "they can still log on" as success.
 - **Trap: BitLocker keys stay in the source.** Export them with `Export-BitLockerKeys.ps1` before any device leaves. After the rejoin, check the destination has a new key for the device (Entra admin centre, Devices, the device, BitLocker keys). If not, run `BackupToAAD-BitLockerKeyProtector -MountPoint C: -KeyProtectorId <id>` in an elevated PowerShell window (the ID comes from `manage-bde -protectors -get C:`), or let an Intune BitLocker policy do it.
-- **Trap: the device is still in the source Intune.** Retire or delete it there once it's rejoined, so the source can't wipe it later, and so the old record doesn't confuse compliance reports.
+- **Trap: the device is still in the source Intune.** Delete its old record there once it's rejoined, so the old record doesn't confuse compliance reports. Delete only: never wipe or retire, because those actions can still reach a device that hasn't checked in for a while ([10 Decommission](../10-Decommission/)).
 - **Trap: Conditional Access in the destination.** A "require compliant device" policy blocks the person until Intune has finished. Allow time, or exclude them for an hour.
 - **Tip:** the OneDrive URL changes with the sign-in name. Sign OneDrive in fresh rather than trying to re-point the old sync relationship.
 - **Tip:** do one device end to end before the night, and time it. That number sets how many people support can handle on day one.
@@ -195,6 +206,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.1 | 2026-11-10 | `Move-TenantDevices.ps1` 1.0.1: option 4 safety guard (`-SourceTenantId`, typed tenant name, local admin must exist and be enabled). "Where to run what" table |
 | 1.2.0 | 2026-11-10 | Added `Move-TenantDevices.ps1`: one menu for package, Intune copy, Autopilot, staged device move and profile handover |
 | 1.1.0 | 2026-11-10 | Added `Copy-ProfileData.ps1`: pre-move snapshot and old-to-new profile copy on the laptop |
 | 1.0.0 | 2026-11-10 | First release of the scripts: `Get-DeviceInventory.ps1` and `Export-BitLockerKeys.ps1`. Printable per-device checklist, timings, three ways. Replaces the planning page |

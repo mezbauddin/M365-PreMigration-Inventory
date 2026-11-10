@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.2.0 |
+| Version | 1.3.0 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -41,12 +41,15 @@ Swap names in. One person can hold several roles in a small business, but the DN
 | T-7 | Mail config, SharePoint and Teams copies, licence shared mailboxes | 05, 02 `-SharedMailboxesOnly` |
 | T-7 | List and clear blockers | 07 `Remove-SourceDomain -BlockersOnly`, `Clear-DeletedUserDomain` |
 | T-7 | Lower TTLs, first validation, heads-up emails | 07, 09, comms |
+| T-7 | Devices: inventory, BitLocker keys, check whether the source uses Intune at all, copy Intune configuration if it does | [08](../08-Devices/) `Get-DeviceInventory`, `Export-BitLockerKeys`, `Move-TenantDevices` option 2 |
 | T-3 | Incremental, fresh inventory, validation, dry run | copy option, 01, 09 |
 | T-1 day | `-pre` snapshot, blockers again, readiness check, go/no-go | 07 `Remove-SourceDomain -SnapshotOnly`, `-BlockersOnly`, `Test-CutoverReadiness` |
 | T-0 | Add domain to destination, TXT, night's `-pre` snapshot, final readiness run | 07 |
 | T-0 | **Rollback point** | |
 | T-0 | Release, verify, DNS, license and convert, switch addresses, OneDrives, test, validate, DKIM | 07, 02 `-Apply`, 04, 09 |
+| T+0 / T+1 | Build the enrolment package, move one willing person's laptop end to end | 08 `Move-TenantDevices` options 1, 4, 5 |
 | T+1 | Block source sign-in, rebuild mapping, OneDrive copy | 07, 02b, copy option |
+| T+1 to deadline | Staged move of every Entra joined laptop, done before the source licences end | 08 `Move-TenantDevices` options 4, 5 (6 as fallback) |
 | T+7 | Sign-off, decommission date | 09, [10](../10-Decommission/) |
 
 ## Licensing timeline
@@ -155,6 +158,8 @@ These should already be done. If they aren't, the dates move.
 | 7 | Lead | Run [09](../09-Validation/) without `-Domain`. Expect warnings; read every fail |
 | 8 | Comms | Send the T-7 heads-up to staff and the external senders notice to clients and suppliers |
 | 9 | DNS owner | Lower TTLs on MX, autodiscover, SPF, DKIM and any CNAMEs flagged |
+| 10 | Device support | Run [08](../08-Devices/) `Get-DeviceInventory.ps1` against the source and `Export-BitLockerKeys.ps1`. Note which devices have no key in Entra ID: their keys get captured on the device in stage 1 of the move |
+| 11 | Device support | Check whether the source uses Intune at all: the inventory's Intune columns, or Intune admin centre, Devices. If it does, `Move-TenantDevices.ps1` option 2 with `-WhatIf`, then for real, so the destination's policies, compliance and scripts are waiting before the first laptop arrives. Re-upload Win32 and LOB app installers from its `mobileApps.json` list. If it doesn't, check the destination's MDM user scope and move on |
 
 ```powershell
 .\Remove-SourceDomain.ps1 -TenantId <source-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Domain fabrikam.com -BlockersOnly
@@ -359,6 +364,30 @@ foreach ($r in Import-Csv .\SourceRecipients-pre-<stamp>.csv) {
     -DestinationSite https://contoso.sharepoint.com/sites/Archive -DestinationLibrary 'Former Staff OneDrive' -CreateFolders
 ```
 
+## Devices: T+0 to the deadline
+
+Devices start after cutover, once people have their new sign-in names and passwords. Everything here is in [08](../08-Devices/); `Move-TenantDevices.ps1` is the script.
+
+| When | Who | Action |
+| --- | --- | --- |
+| T+0 or T+1 | Device support | On your admin PC: option 1 builds the bulk enrolment `.ppkg` for the destination. Keep it in one private place |
+| T+1 | Device support | One willing person first, end to end: option 4 on their laptop with `-SourceTenantId`, re-run after each restart, then option 5 after their first sign-in. Time it |
+| T+1 onwards | Device support | Every other Entra joined laptop, same way, with the person beside you. Hybrid joined and on-prem AD devices are not in this queue |
+| Before the deadline | Lead | Every laptop moved before the source licences end or the source is closed ([10](../10-Decommission/)). Put the deadline in the licensing timeline and work back from it |
+| After each laptop | Device support | Check the destination has its BitLocker key. Delete its old device object in the source later, in 10; never wipe or retire it |
+
+```powershell
+# Admin PC (yours is fine): build the package
+.\Move-TenantDevices.ps1 -Action BuildPackage -DestinationTenantId <dest-guid> -DestinationAdmin admin@contoso.onmicrosoft.com
+
+# The laptop being moved, as administrator, re-run after each restart until it says Done
+.\Move-TenantDevices.ps1 -Action MoveDevice -SourceTenantId <source-guid> -PackagePath C:\MigrationBackup\contoso-join.ppkg
+```
+
+**Tip:** `Get-MigrationReport.ps1` picks up the `DeviceMove-*.csv` each laptop writes. Copy them back from `C:\MigrationBackup` to your report folder and it counts the laptops done.
+**Trap:** never run option 4 on your own PC. It takes the machine it runs on out of its tenant. `-SourceTenantId` makes it stop if the machine is joined anywhere else.
+**Trap:** after `Block-SourceSignIn` people are on cached credentials until their laptop moves. That holds for days, not weeks. Plan the device queue so nobody waits more than a working week.
+
 ## T+2 to T+6: settle
 
 - [ ] Final incremental copies of mail, OneDrive, SharePoint and Teams
@@ -390,6 +419,7 @@ foreach ($r in Import-Csv .\SourceRecipients-pre-<stamp>.csv) {
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.3.0 | 2026-11-10 | Devices: T-7 inventory, BitLocker keys and Intune check and copy; new "Devices: T+0 to the deadline" section with `Move-TenantDevices.ps1` package build and per-laptop staged move, finished before the source licences end |
 | 1.2.0 | 2026-11-10 | Made this the canonical order. Snapshot at T-1 and again on the night before readiness; `-BlockersOnly` for blockers; DNS full scan and any NS move at T-14; `-FixApplications`, `-RemoveConflictingGuests`, `-SharedMailboxesOnly`, 02b and 04 placed in the order. Snapshot name is `SourceRecipients-pre-<stamp>.csv`. Added licensing timeline, coexistence, throttling and a worked rollback after the release |
 | 1.1.0 | 2026-11-10 | Add-first T-0 order. T-14 DNS host check and name server move. T-1 readiness check and test sign-in plan. T+1 block source sign-in, password-change check, rebuild the mapping. From a live cutover |
 | 1.0.0 | 2026-11-09 | First release |

@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.1.1 |
+| Version | 1.2.0 |
 | Released | 10 November 2026 |
 | Licence | MIT |
 
@@ -52,6 +52,9 @@ Likelihood and impact are High, Medium or Low, from my experience on small and m
 | 31 | Location-based Conditional Access in the destination blocks the admin's test sign-in (error 53003), which looks like a failed migration | Medium | Medium | Plan who tests from where at T-1. Test from an allowed location, or exclude the test account for the night and remove the exclusion after. 09 lists every location policy | [09](../09-Validation/), [runbook](Cutover-Runbook.md) |
 | 32 | Moving DNS copies an alias (flattened) apex record as a fixed IP address, and the website breaks when that IP changes | Medium | Medium | Ask the web host what the apex should point at. Use their documented record or the new provider's own flattening. Never publish an apex CNAME | [DNS move playbook](DNS-Move-Playbook.md), [07 Add-TargetDomain](../07-DomainCutover/) |
 | 33 | Graph module version clash ("Could not load file or assembly") stops a script part way through | Medium | High | Run `Test-ModuleHealth` at T-14 and before the night. One version of every Microsoft.Graph module. A fresh window per task | [tools](../tools/) |
+| 34 | A device leaves its tenant with no working local admin, so nobody can sign in to join it to the destination | Medium | High | `Move-TenantDevices` option 4 refuses to leave unless the safety-net local admin exists, is enabled and is an administrator. Sign in as it once before stage 2. Always pass `-SourceTenantId`, so it can't run on the wrong machine, such as your own admin PC | [08](../08-Devices/) |
+| 35 | Profile handover fails, so the person signs in to an empty profile or a broken one | Low | High | Option 5 checks no profile is loaded, verifies the result and rolls back on any failure, leaving the old profile untouched. Fallback is option 6, which copies the data. Do one willing person end to end first | [08](../08-Devices/) |
+| 36 | The bulk enrolment package (`.ppkg`) leaks and joins unknown devices to the destination for up to 180 days | Low | High | Keep it in one private place, never a shared drive or email. Shortest validity that covers the device window. Delete it when the last laptop is done, and remove the `package_<guid>` account it created in the destination | [08](../08-Devices/) |
 
 ## Project-specific risks
 
@@ -65,6 +68,7 @@ Add yours here, in the same format.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.0 | 2026-11-10 | Risks 34 to 36 for devices: leaving a tenant without a local admin, profile handover failure, a leaked enrolment package |
 | 1.1.1 | 2026-11-10 | Blocker and snapshot timing match the cutover runbook |
 | 1.1.0 | 2026-11-10 | Risks 25 to 33 from a live cutover: DNS host access, name server TTL, removal blockers, wrong-tenant sessions, snapshot timing, guest address conflicts, Conditional Access on test sign-ins, alias records, module clashes |
 | 1.0.0 | 2026-11-09 | First release |
