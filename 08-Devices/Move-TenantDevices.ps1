@@ -59,7 +59,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
+    Version : 1.0.2
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -69,6 +69,9 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.2  2026-11-10  Option 1 finds Windows Configuration Designer from the Microsoft Store as well as the ADK,
+                         installs it with winget when missing, checks for it before asking you to sign in, and falls
+                         back to a guided build when the Store version won't build from the command line.
       1.0.1  2026-11-10  MoveDevice safety guard: stops if -SourceTenantId is given and this machine is joined to a
                          different tenant; without it, shows the joined tenant name and ID and requires the tenant
                          name typed exactly (not just LEAVE). Stops before leaving unless the local admin exists, is
@@ -178,48 +181,79 @@ function Get-SiblingScript($name) {
 }
 
 # ---------------------------------------------------------------- 1. enrolment package (admin PC)
+function Find-Wcd {
+    # Windows Configuration Designer comes two ways: the Windows ADK (Program Files) or the Microsoft Store (WindowsApps)
+    $adk = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Imaging and Configuration Designer" -Recurse -Filter ICD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($adk) { return [pscustomobject]@{ Exe = $adk.FullName; Root = (Split-Path $adk.FullName); Source = 'ADK'; Launch = $adk.FullName } }
+    $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+    if ($pkg) {
+        $exe = Join-Path $pkg.InstallLocation 'ICD.exe'
+        $appId = try { @((Get-AppxPackageManifest $pkg).Package.Applications.Application)[0].Id } catch { 'App' }
+        return [pscustomobject]@{ Exe = $(if (Test-Path $exe) { $exe } else { $null }); Root = $pkg.InstallLocation; Source = 'Store'; Launch = "shell:AppsFolder\$($pkg.PackageFamilyName)!$appId" }
+    }
+    $null
+}
+function Install-Wcd {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Warn2 'winget is not available. Install "Windows Configuration Designer" from the Microsoft Store, then run this option again.'
+        Start-Process 'ms-windows-store://pdp/?ProductId=9NBLGGH4TX22' -ErrorAction SilentlyContinue
+        return $null
+    }
+    Write-Host 'Windows Configuration Designer is not installed. Installing it from the Microsoft Store (winget)...' -ForegroundColor Cyan
+    winget install --id 9NBLGGH4TX22 --source msstore --accept-package-agreements --accept-source-agreements --silent | Out-Host
+    Start-Sleep 3
+    $w = Find-Wcd
+    if ($w) { Write-Ok "Windows Configuration Designer installed ($($w.Source) version)" } else { Write-Warn2 'Installed, but not found yet. Close and reopen PowerShell, then run this option again.' }
+    $w
+}
+
 function Invoke-BuildPackage {
     Write-Step 'Build the enrolment package (run on your admin PC)'
+    $wcd = Find-Wcd
+    if ($wcd) { Write-Ok "Windows Configuration Designer found ($($wcd.Source) version)" } else { $wcd = Install-Wcd; if (-not $wcd) { return } }
+
     if (-not $DestinationTenantId) { $DestinationTenantId = Read-Host 'Destination tenant ID (GUID)' }
     if (-not $DestinationAdmin) { $DestinationAdmin = Read-Host 'Destination admin sign-in (e.g. admin@contoso.com)' }
-    $name = Read-Host 'Package name (letters and digits, e.g. contoso-join)'
+    $name = Read-Host 'Package name (letters, digits and hyphens, e.g. contoso-join)'
     if (-not $name) { $name = 'tenant-join' }
-    $expiry = Read-Host 'Token validity in days (max 180, default 180)'
+    $name = $name -replace '[^A-Za-z0-9-]', ''
+    $expiry = Read-Host 'Token validity in days (max 180, default 180; used by the guided fallback)'
     if (-not $expiry) { $expiry = 180 }
     $ppkg = Join-Path $WorkFolder "$name.ppkg"
 
-    # The bulk token is a refresh token issued to the Windows Configuration Designer app for the device registration
-    # service. WCD requests it with the same OAuth device-code flow; the account "package_<guid>" that appears in the
-    # tenant afterwards is created by the service, not by us.
-    $wcdApp = 'b90d5b8f-5503-4153-b545-b31cecfaece2'
-    $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
-    $bprt = $null
-    Write-Host 'Trying the scripted token request (same flow as Windows Configuration Designer)...' -ForegroundColor Cyan
-    try {
-        $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/devicecode" -Body @{ client_id = $wcdApp; resource = $drs }
-        Write-Host $dc.message -ForegroundColor Yellow
-        Write-Host "Sign in as $DestinationAdmin. Waiting..." -ForegroundColor Yellow
-        $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds ([int]$dc.interval)
-            try {
-                $tok = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $wcdApp; code = $dc.device_code; resource = $drs }
-                if ($tok.refresh_token) { $bprt = $tok.refresh_token; break }
-            }
-            catch {
-                $body = ''; try { $body = $_.ErrorDetails.Message } catch {}
-                if ($body -match 'authorization_pending') { continue }
-                throw
+    $built = $false
+    if ($wcd.Exe) {
+        # The bulk token is a refresh token issued to the Windows Configuration Designer app for the device registration
+        # service. WCD requests it with the same OAuth device-code flow; the account "package_<guid>" that appears in the
+        # destination afterwards is created by the service, not by us.
+        $wcdApp = 'b90d5b8f-5503-4153-b545-b31cecfaece2'
+        $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
+        $bprt = $null
+        Write-Host 'Requesting the bulk enrolment token (same flow as Windows Configuration Designer)...' -ForegroundColor Cyan
+        try {
+            $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/devicecode" -Body @{ client_id = $wcdApp; resource = $drs }
+            Write-Host $dc.message -ForegroundColor Yellow
+            Write-Host "Sign in as $DestinationAdmin. Waiting..." -ForegroundColor Yellow
+            $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds ([int]$dc.interval)
+                try {
+                    $tok = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $wcdApp; code = $dc.device_code; resource = $drs }
+                    if ($tok.refresh_token) { $bprt = $tok.refresh_token; break }
+                }
+                catch {
+                    $body = ''; try { $body = $_.ErrorDetails.Message } catch {}
+                    if ($body -match 'authorization_pending') { continue }
+                    throw
+                }
             }
         }
-    }
-    catch { Write-Warn2 "Scripted token request failed: $($_.Exception.Message)" }
+        catch { Write-Warn2 "Scripted token request failed: $($_.Exception.Message)" }
 
-    $icd = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Imaging and Configuration Designer" -Recurse -Filter ICD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($bprt -and $icd) {
-        Write-Ok 'Token received. Building the package with ICD.exe.'
-        $id = [guid]::NewGuid().ToString()
-        $xml = @"
+        if ($bprt) {
+            Write-Ok 'Token received. Building the package with ICD.exe.'
+            $id = [guid]::NewGuid().ToString()
+            $xml = @"
 <?xml version="1.0" encoding="utf-8"?>
 <WindowsCustomizations>
   <PackageConfig xmlns="urn:schemas-Microsoft-com:Windows-ICD-Package-Config.v1.0">
@@ -233,36 +267,45 @@ function Invoke-BuildPackage {
   </Settings>
 </WindowsCustomizations>
 "@
-        $xmlPath = Join-Path $WorkFolder "$name.customizations.xml"
-        $xml | Set-Content $xmlPath -Encoding UTF8 -WhatIf:$false
-        $store = Get-ChildItem (Split-Path $icd.FullName) -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
-        $args = @("/Build-ProvisioningPackage", "/CustomizationXML:`"$xmlPath`"", "/PackagePath:`"$ppkg`"", '+Overwrite')
-        if ($store) { $args += "/StoreFile:`"$($store.FullName)`"" }
-        & $icd.FullName @args | Out-Null
-        Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
-        if (Test-Path $ppkg) { Write-Ok "Package built: $ppkg (keep it private: it joins any device to the tenant for $expiry days)"; Add-State 'Package' $ppkg; return }
-        Write-Warn2 'ICD.exe did not produce a package.'
+            $xmlPath = Join-Path $WorkFolder "$name.customizations.xml"
+            $xml | Set-Content $xmlPath -Encoding UTF8 -WhatIf:$false
+            $bprt = $null
+            $storeFile = Get-ChildItem $wcd.Root -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
+            $icdArgs = @('/Build-ProvisioningPackage', "/CustomizationXML:`"$xmlPath`"", "/PackagePath:`"$ppkg`"", '+Overwrite')
+            if ($storeFile) { $icdArgs += "/StoreFile:`"$($storeFile.FullName)`"" }
+            try { & $wcd.Exe @icdArgs 2>&1 | Out-String | Add-Content (Join-Path $WorkFolder "ICD-build-$script:Stamp.log") }
+            catch { Write-Warn2 "ICD.exe could not run from the command line ($($_.Exception.Message))." }
+            Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue   # it holds the token
+            if (Test-Path $ppkg) { $built = $true }
+            else { Write-Warn2 "ICD.exe did not produce a package (log: ICD-build-$script:Stamp.log). The Store version sometimes blocks command-line builds; using the guided route instead." }
+        }
     }
-    if ($bprt -and -not $icd) { Write-Warn2 'Token received but Windows Configuration Designer (ICD.exe) is not installed to build the package.' }
+    else { Write-Warn2 'This Windows Configuration Designer version cannot be run from the command line. Using the guided route.' }
 
-    # Fallback: Windows Configuration Designer, guided
-    Write-Step 'Fallback: Windows Configuration Designer'
-    if (-not $icd) {
-        Write-Host 'Install it with one of these, then run this option again:' -ForegroundColor Yellow
-        Write-Host '  winget install --id 9NBLGGH4TX22 --source msstore        (Microsoft Store version, quickest)'
-        Write-Host '  or the Windows ADK, feature "Configuration Designer": adksetup.exe /features OptionId.ICDConfigurationDesigner /quiet'
+    if ($built) {
+        Write-Ok "Package built: $ppkg"
+        Write-Host 'Keep it private: it joins any device to the destination tenant until the token expires. Delete it when the move is done.' -ForegroundColor Yellow
+        Add-State 'Package' $ppkg
         return
     }
+
+    # Guided: Windows Configuration Designer's own wizard (requests its own token)
+    Write-Step 'Guided: build it in Windows Configuration Designer (about 3 minutes)'
     Write-Host @"
-1. Open Windows Configuration Designer: Provision desktop devices.
-2. Name: $name. Set up device: any name pattern, keep the rest default. Set up network: skip (off).
-3. Account management: "Enroll in Azure AD", Bulk token expiry: $expiry days, Get Bulk Token, sign in as $DestinationAdmin.
-4. Add applications and certificates: skip. Finish: Create. Note the path it shows.
-5. Copy the .ppkg to: $ppkg
+1. Click "Provision desktop devices".
+2. Name: $name. Next.
+3. Set up device: type any name pattern (e.g. HST-%RAND:4%) or leave blank. Turn off "Remove pre-installed software". Next.
+4. Set up network: turn it OFF. Next.
+5. Account management: choose "Enroll in Azure AD". Bulk Token Expiry: $expiry days from today. Click "Get Bulk Token" and sign in as $DestinationAdmin.
+   If it asks "Allow my organization to manage my device", untick it and choose "This app only".
+6. Add applications / certificates: skip. Finish: click Create. It shows the folder it saved to.
 "@ -ForegroundColor Yellow
-    Start-Process $icd.FullName -ErrorAction SilentlyContinue
-    $p = Read-Host 'When the package exists, paste its full path (or Enter to stop here)'
-    if ($p -and (Test-Path $p)) { Copy-Item $p $ppkg -Force; Write-Ok "Package ready: $ppkg"; Add-State 'Package' $ppkg }
+    if ($wcd.Source -eq 'Store') { Start-Process 'explorer.exe' $wcd.Launch -ErrorAction SilentlyContinue } else { Start-Process $wcd.Launch -ErrorAction SilentlyContinue }
+    $default = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "Windows Imaging and Configuration Designer (WICD)\$name\$name.ppkg"
+    $p = Read-Host "When it says the package is built, press Enter (or paste the .ppkg path if it isn't $default)"
+    if (-not $p) { $p = $default }
+    if (Test-Path $p) { Copy-Item $p $ppkg -Force -WhatIf:$false; Write-Ok "Package ready: $ppkg"; Add-State 'Package' $ppkg }
+    else { Write-Warn2 "No package at $p. Find the .ppkg in the folder Windows Configuration Designer showed and pass it to option 4 with -PackagePath." }
 }
 
 # ---------------------------------------------------------------- 2. Intune configuration (admin PC)
