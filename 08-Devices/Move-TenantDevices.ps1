@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.4
+    Version : 1.2.5
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,7 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.5  2026-11-10  Clearing old sign-ins no longer stops on a missing Office registry key (Windows PowerShell stderr).
       1.2.4  2026-11-10  Option 5 says how many files it is re-permissioning, that it takes a while, and when pass 1 ends.
       1.2.3  2026-11-10  Option 5: icacls 'Access is denied' on legacy junctions no longer aborts the handover under
                          Windows PowerShell; ownership verified instead. If a profile is still open, offers a restart.
@@ -959,11 +960,11 @@ function Clear-OldSignIns([string]$ProfilePath, [string]$Log) {
     $hive = Join-Path $ProfilePath 'NTUSER.DAT'
     $key = "MIG_$([guid]::NewGuid().ToString('N').Substring(0,8))"
     reg load "HKU\$key" "$hive" | Out-Null
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # reg.exe writes to stderr for missing keys
     try {
         foreach ($k in 'Software\Microsoft\Office\16.0\Common\Identity', 'Software\Microsoft\Office\16.0\Common\Internet\WebServiceCache', 'Software\Microsoft\Office\16.0\Common\ServicesManagerCache') {
             $rk = "HKU\$key\$k"
-            reg query $rk 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-Path "Registry::HKEY_USERS\$key\$k") {
                 $bak = Join-Path $WorkFolder ("RegBackup-$stamp-" + ($k -replace '[\\ ]', '_') + '.reg')
                 reg export $rk $bak /y | Out-Null
                 reg delete $rk /f | Out-Null
@@ -971,7 +972,7 @@ function Clear-OldSignIns([string]$ProfilePath, [string]$Log) {
             }
         }
     }
-    finally { [gc]::Collect(); Start-Sleep 1; reg unload "HKU\$key" | Out-Null }
+    finally { $ErrorActionPreference = $eap; [gc]::Collect(); Start-Sleep 1; reg unload "HKU\$key" 2>&1 | Out-Null }
     if ($done) { "Cleared old sign-ins:`r`n  " + ($done -join "`r`n  ") | Add-Content $Log -WhatIf:$false; Write-Ok "Cleared $($done.Count) cached old-tenant sign-in item(s). Apps will ask for the new sign-in once." }
     else { Write-Ok 'No cached old-tenant sign-ins found.' }
 }
