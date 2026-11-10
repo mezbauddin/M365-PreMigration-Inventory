@@ -34,6 +34,11 @@
 .PARAMETER Incremental
     Only copy what's new or changed since the last run (ShareGate incremental update).
 
+.PARAMETER NormalMode
+    Copy item by item instead of ShareGate's Insane mode. Insane mode (the default here, and the app's default) uploads
+    through Microsoft's migration API and is much faster for OneDrives; PowerShell's Copy-Content uses normal mode
+    unless told otherwise, which is why a script run can look stuck next to the same copy started in the app.
+
 .PARAMETER WhatIf
     Run ShareGate's pre-check for every row instead of copying.
 
@@ -47,7 +52,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.2.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -62,6 +67,7 @@ param(
     [Parameter(Mandatory)][string]$DestinationAdminUrl,
     [string]$MappingFile,
     [switch]$Incremental,
+    [switch]$NormalMode,
     [switch]$WhatIf
 )
 
@@ -115,6 +121,7 @@ $report = foreach ($row in $rows) {
         if ($mappings) { $p.MappingSettings = $mappings }
         if ($copySettings) { $p.CopySettings = $copySettings }
         if ($WhatIf) { $p.WhatIf = $true }
+        elseif (-not $NormalMode) { $p.InsaneMode = $true }
 
         $r = Copy-Content @p
         Write-Host ("   {0}: {1} successes, {2} warnings, {3} errors" -f $r.Result, $r.Successes, $r.Warnings, $r.Errors) -ForegroundColor $(if ($r.Errors) { 'Yellow' } else { 'Green' })

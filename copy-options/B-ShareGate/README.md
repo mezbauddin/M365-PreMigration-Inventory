@@ -8,7 +8,7 @@
 | Version | 2.0.0 |
 | Tested | Production, on a small business tenant: mailboxes with large archives, SharePoint, Teams and OneDrive |
 | Tool version | ShareGate Migrate 26.11 |
-| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0, [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) 1.0.1 |
+| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.2.0, [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) 1.0.1 |
 | Licence | MIT (this page and script; ShareGate itself is a paid product) |
 
 Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
@@ -18,6 +18,7 @@ Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration 
 | Version | Date | Change |
 | --- | --- | --- |
 | 2.0.0 | 2026-11-10 | Adds what happens without it, three ways and a tips and traps summary. Live-job specifics replaced with generic wording; the lessons are unchanged |
+| 1.3.0 | 2026-11-10 | `Copy-DrivesWithShareGate.ps1` 1.2.0 uses Insane mode by default (the app's default); PowerShell's Copy-Content is normal mode unless told, and looked stuck next to the same copy started in the app. `-NormalMode` to opt out |
 | 1.2.0 | 2026-11-10 | `Copy-PeopleOneDrives.ps1` 1.0.0: people's OneDrives end to end (finds real URLs by owner in both tenants, creates missing destination OneDrives, adds you as admin, runs the copy) |
 | 1.1.0 | 2026-11-10 | `Copy-DrivesWithShareGate.ps1` 1.1.0 leaves out rows marked Skip by `New-DriveCopyList.ps1` |
 | 1.0.0 | 2026-11-09 | First version, written up from a live migration |
@@ -129,6 +130,8 @@ powershell.exe -ExecutionPolicy Bypass -File .\Copy-PeopleOneDrives.ps1 -Mapping
     -DestinationAdminUrl https://contoso-admin.sharepoint.com -DestinationAdmin admin@contoso.com -SgumFile .\Mapping-PostCutover\UserMapping.sgum
 ```
 
+- **Trap:** ShareGate's app copies in Insane mode by default; `Copy-Content` in PowerShell doesn't unless you pass `-InsaneMode`. Side by side, the script's task sat at 0 successes while the app's raced ahead. The script now uses Insane mode.
+- **Expected warning:** "The default OneNote notebook ... will no longer be the default at the destination". Harmless; rename it afterwards if the person wants it as their default.
 - **Trap:** a person with no source OneDrive never used it. There is nothing to copy; their new OneDrive is created when they first sign in.
 - **Tip:** with Files On-Demand, most of a person's files exist only in the cloud. Copy their OneDrive **before** you move their laptop, or they sign in to empty folders.
 
