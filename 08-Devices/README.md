@@ -189,6 +189,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 ## Tips and traps
 
 - **The current ADK designer crashes from the command line.** ICD.exe in ADK 10.1.26100 and later is missing `Microsoft.Diagnostics.Tracing.EventSource.dll` (FileNotFoundException). Option 1 runs a private copy with that file added from its NuGet package (1.1.28).
+- **Same email, different tenant: clear the cached sign-ins.** The handed-over profile still holds the old tenant's tokens (Microsoft.AAD.BrokerPlugin, Office `Common\Identity`, Teams cache). Left alone, Office and Teams loop on "Something went wrong". Option 5 renames or exports them. OneDrive still needs Unlink this PC and a new sign-in.
 - **Entra profiles don't always show as `AzureAD\name`.** On current Windows they can show a tenant prefix (`CONTOSO\name`). Match them by SID instead: Entra user SIDs start `S-1-12-1-`.
 - **Over Quick Assist, typing is where mistakes happen.** Every choice in options 4 and 5 is a numbered list; irreversible steps need an explicit 1 (Enter alone does nothing).
 - **32-bit PowerShell can't see dsregcmd.** Some "Run as administrator" shortcuts open Windows PowerShell (x86). There `dsregcmd` is not found and BitLocker and registry calls are redirected. The script now relaunches itself in 64-bit; by hand, run `C:/Windows/Sysnative/WindowsPowerShell/v1.0/powershell.exe` first.
@@ -216,6 +217,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.4.2 | 2026-11-10 | Move-TenantDevices 1.2.2: option 5 clears the old tenant's cached sign-ins (sign-in broker, Office identities, Teams cache); renamed or exported first, so reversible. |
 | 1.4.1 | 2026-11-10 | Move-TenantDevices 1.2.1: stage 2 finds the `.ppkg` if it was copied in after stage 1; the generated local admin password is short and easy to type (`Move1234!`) because the account is temporary. |
 | 1.4.0 | 2026-11-10 | Move-TenantDevices 1.2.0: pick by number instead of typing (profiles, package, confirmations); can generate the local admin password; package auto-found; Entra profiles detected by SID so option 5 works when Windows shows a tenant prefix instead of `AzureAD\`. |
 | 1.3.1 | 2026-11-10 | Move-TenantDevices 1.1.1: relaunches itself in 64-bit PowerShell when started from 32-bit (x86), where `dsregcmd` is not found. |

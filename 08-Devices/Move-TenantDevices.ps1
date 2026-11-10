@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.1
+    Version : 1.2.2
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.2  2026-11-10  Option 5 clears the old tenant's cached sign-ins in the handed-over profile (sign-in broker, Office
+                         identities, Teams cache), renamed or exported first so it can be undone.
       1.2.1  2026-11-10  Stage 2 finds the .ppkg in the work folder if it was copied in after stage 1. Generated local
                          admin password is short and easy to type on a call (Move1234!): the account is temporary.
       1.2.0  2026-11-10  Pick by number instead of typing: profiles, package, local admin password (can generate one),
@@ -928,6 +930,47 @@ sign in with the person's NEW work account, restart, sign in as .\$($state.Local
 }
 
 # ---------------------------------------------------------------- 5. profile handover
+function Clear-OldSignIns([string]$ProfilePath, [string]$Log) {
+    # The handed-over profile still caches sign-ins for the OLD tenant: the Windows sign-in broker (WAM), Office's
+    # identity list and Teams. Same email, different tenant, so apps loop on "Something went wrong" or use stale
+    # tokens. Everything is renamed or exported first, so it can be put back. Files and OneDrive data are not touched.
+    $stamp = Get-Date -Format yyyyMMddHHmm
+    $done = @()
+    $folders = @(
+        'AppData\Local\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Accounts',
+        'AppData\Local\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Cache',
+        'AppData\Local\Microsoft\TokenBroker\Cache',
+        'AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache',
+        'AppData\Roaming\Microsoft\Teams',
+        'AppData\Local\Microsoft\IdentityCache',
+        'AppData\Local\Microsoft\OneAuth'
+    )
+    foreach ($f in $folders) {
+        $full = Join-Path $ProfilePath $f
+        if (Test-Path $full) {
+            try { Rename-Item $full "$(Split-Path $full -Leaf).old-$stamp" -ErrorAction Stop; $done += $f } catch { Write-Warn2 "Could not rename $f : $($_.Exception.Message)" }
+        }
+    }
+    # Office identities and cached sign-in state in the person's registry hive
+    $hive = Join-Path $ProfilePath 'NTUSER.DAT'
+    $key = "MIG_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    reg load "HKU\$key" "$hive" | Out-Null
+    try {
+        foreach ($k in 'Software\Microsoft\Office\16.0\Common\Identity', 'Software\Microsoft\Office\16.0\Common\Internet\WebServiceCache', 'Software\Microsoft\Office\16.0\Common\ServicesManagerCache') {
+            $rk = "HKU\$key\$k"
+            reg query $rk 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $bak = Join-Path $WorkFolder ("RegBackup-$stamp-" + ($k -replace '[\\ ]', '_') + '.reg')
+                reg export $rk $bak /y | Out-Null
+                reg delete $rk /f | Out-Null
+                $done += "HKCU\$k (backup $bak)"
+            }
+        }
+    }
+    finally { [gc]::Collect(); Start-Sleep 1; reg unload "HKU\$key" | Out-Null }
+    if ($done) { "Cleared old sign-ins:`r`n  " + ($done -join "`r`n  ") | Add-Content $Log -WhatIf:$false; Write-Ok "Cleared $($done.Count) cached old-tenant sign-in item(s). Apps will ask for the new sign-in once." }
+    else { Write-Ok 'No cached old-tenant sign-ins found.' }
+}
 function Grant-HiveAccess([string]$HivePath, [string]$Sid) {
     # Loads a registry hive file and grants the SID full control at the root with inheritance
     $key = "MIG_$([guid]::NewGuid().ToString('N').Substring(0,8))"
@@ -982,7 +1025,15 @@ function Invoke-HandoverProfile {
         $check = Get-CimInstance Win32_UserProfile | Where-Object SID -eq $new.Sid
         if ($check.LocalPath -ne $old.Path) { throw "Verification failed: profile for $($new.Sid) is $($check.LocalPath)" }
         Write-Ok "Done. $($new.Account) now uses $($old.Path). Empty profile parked at $parked (delete it after 30 days)."
-        Write-Host 'Next: the person signs in. OneDrive, Outlook and Teams will ask for their new sign-in once; files, desktop and settings are already there.' -ForegroundColor Cyan
+        # 5. Clear the old tenant's cached sign-ins (renamed / exported, reversible)
+        try { Clear-OldSignIns $old.Path $log } catch { Write-Warn2 "Clearing old sign-ins: $($_.Exception.Message). Not critical: sign out of Office, Teams and OneDrive once and sign in again." }
+        Write-Host @'
+Next, signed in as the person:
+  - Office (Word/Outlook) and Teams: sign in once with the new email.
+  - OneDrive: click the cloud icon > Settings > Account > Unlink this PC, then sign in with the new email.
+    The old OneDrive folder stays on disk as a local copy; their files are already in the new OneDrive.
+  - Outlook classic: if it keeps showing errors, Control Panel > Mail > Show Profiles > Add a new profile.
+'@ -ForegroundColor Cyan
         Write-Host 'Saved browser passwords and Windows Hello are tied to the old account and need setting up again.' -ForegroundColor Yellow
         $rep = Join-Path $WorkFolder "DeviceMove-$env:COMPUTERNAME-$script:Stamp.csv"
         [pscustomobject]@{ Computer = $env:COMPUTERNAME; Status = 'Done'; OldTenant = $state.OldTenantName; NewTenant = (Get-DsregStatus).TenantName; Person = $new.Account; ProfilePath = $old.Path; Parked = $parked; Method = 'Handover'; When = Get-Date } | Export-Csv $rep -NoTypeInformation -WhatIf:$false
