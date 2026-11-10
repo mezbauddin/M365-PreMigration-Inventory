@@ -164,10 +164,6 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 ## Changelog
 
 | Version | Date | Change |
-|---|---|---|
-| Copy-ProfileData 1.0.0 | 2026-11-10 | New: pre-move snapshot and old-to-new profile copy on the laptop |
-
-
-| Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | Added `Copy-ProfileData.ps1`: pre-move snapshot and old-to-new profile copy on the laptop |
 | 1.0.0 | 2026-11-10 | First release of the scripts: `Get-DeviceInventory.ps1` and `Export-BitLockerKeys.ps1`. Printable per-device checklist, timings, three ways. Replaces the planning page |
