@@ -47,7 +47,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -128,7 +128,11 @@ $oldLabel = "From old profile ($($old.Folder))"
 
 function Copy-Tree($From, $To, $What) {
     if (-not (Test-Path $From)) { return }
-    $files = @(Get-ChildItem $From -Recurse -File -Force -ErrorAction SilentlyContinue)
+    $all = @(Get-ChildItem $From -Recurse -File -Force -ErrorAction SilentlyContinue)
+    # Cloud-only OneDrive placeholders (Offline / recall-on-access) show a full size but have no data on disk:
+    # count them separately so the report doesn't promise files that can't be copied from this machine
+    $cloudOnly = @($all | Where-Object { ([int]$_.Attributes -band 0x1000) -or ([int]$_.Attributes -band 0x400000) -or ([int]$_.Attributes -band 0x40000) })
+    $files = @($all | Where-Object { $cloudOnly -notcontains $_ })
     $size = [math]::Round((($files | Measure-Object Length -Sum).Sum) / 1MB, 1)
     if ($PSCmdlet.ShouldProcess("$What ($($files.Count) files, $size MB)", "Copy to $To")) {
         # /XA:O skips cloud-only OneDrive placeholders (they can't download now and are in the cloud copy anyway)
@@ -137,7 +141,8 @@ function Copy-Tree($From, $To, $What) {
         $code = $LASTEXITCODE
         $status = if ($code -lt 8) { 'Copied' } else { "Problem (robocopy $code, see log)" }
     } else { $status = 'WhatIf'; $code = $null }
-    $report.Add([pscustomobject]@{ Item = $What; Files = $files.Count; MB = $size; Status = $status; To = $To })
+    $report.Add([pscustomobject]@{ Item = $What; Files = $files.Count; MB = $size; CloudOnlyNotCopied = $cloudOnly.Count; Status = $status; To = $To })
+    if ($cloudOnly.Count) { Write-Warning "$What : $($cloudOnly.Count) cloud-only file(s) were not on this laptop and were not copied. They come across with the OneDrive copy (ShareGate or Graph), not from here." }
 }
 
 foreach ($f in 'Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Favorites') {

@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.5
+    Version : 1.3.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.3.0  2026-11-10  Option 6 (copy) is the recommended route; option 5 (handover) warns first. Field result: handover gave
+                         the right profile mapping but the first sign-in stuck on a black screen (setup screens); copy worked.
       1.2.5  2026-11-10  Clearing old sign-ins no longer stops on a missing Office registry key (Windows PowerShell stderr).
       1.2.4  2026-11-10  Option 5 says how many files it is re-permissioning, that it takes a while, and when pass 1 ends.
       1.2.3  2026-11-10  Option 5: icacls 'Access is denied' on legacy junctions no longer aborts the handover under
@@ -991,6 +993,8 @@ function Grant-HiveAccess([string]$HivePath, [string]$Sid) {
 function Invoke-HandoverProfile {
     if (-not (Test-Elevated)) { throw 'Run as administrator.' }
     Write-Step 'Hand the old profile to the new account'
+    Write-Warn2 'Field note: on Windows 11 with OneDrive Known Folder Move and per-user setup screens (Windows Hello, OOBE), a handed-over profile can sign in to a black screen. Option 6 (copy into the new profile) is the safer default; use this only if you need app settings carried over and can test first.'
+    if (-not (Confirm-Go 'Hand over the profile anyway?' 'Yes, hand it over (advanced)' -NoDefault)) { Write-Host 'Use option 6: -Action CopyProfile' -ForegroundColor Cyan; return }
     $state = Get-State
     $profiles = @(Get-Profiles)
     if (-not $OldProfile) { $OldProfile = $state.OldProfile }
