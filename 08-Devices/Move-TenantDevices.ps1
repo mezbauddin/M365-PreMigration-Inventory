@@ -43,6 +43,10 @@
     this machine's dsregcmd TenantId is different, it stops before changing anything. Strongly recommended for
     MoveDevice.
 
+.PARAMETER AllowWizard
+    Option 1 only: if the silent build fails, open the Windows Configuration Designer wizard instead of stopping.
+    Off by default, so option 1 is no-touch.
+
 .PARAMETER UseDeviceCode
     Option 1 only: sign in with a device code instead of the interactive sign-in. Off by default, because many
     tenants block device code flow with Conditional Access.
@@ -63,7 +67,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.5
+    Version : 1.0.6
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -73,6 +77,9 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.6  2026-11-10  Option 1 is no-touch: builds with the ADK designer or a copy of the Store designer run from the
+                         command line, installs the ADK designer silently if needed, reports exit codes and never opens
+                         the wizard unless -AllowWizard.
       1.0.5  2026-11-10  Option 1 signs in interactively (Windows sign-in broker, then system browser, then sign-in
                          window) so MFA and Conditional Access apply. Device code only with -UseDeviceCode.
       1.0.4  2026-11-10  Option 1 builds the package with no clicks: real bulk token via bulkaadjtoken (the token
@@ -106,6 +113,7 @@ param(
     [string]$GroupMappingFile,
     [string]$LocalAdminName = 'migadmin',
     [switch]$UseDeviceCode,
+    [switch]$AllowWizard,
     [switch]$Force
 )
 
@@ -307,30 +315,49 @@ function Get-BulkToken([string]$TenantId, [string]$Admin, [int]$Days, [string]$P
     if ($r.resultData -is [string] -and $r.resultData.Length -gt 200) { return $r.resultData }
     throw 'Bulk token request succeeded but no token was found in the response.'
 }
+function Get-IcdCandidates([object]$Wcd) {
+    # Command-line builders, most reliable first. The Store app can't be driven from the command line inside its
+    # sandbox, so its files are copied out to a private folder and ICD.exe runs from there (no admin needed).
+    $list = @()
+    $adk = Find-Wcd | Where-Object Source -eq 'ADK'
+    if ($adk) { $list += $adk }
+    $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+    if ($pkg) {
+        $dest = Join-Path $env:LOCALAPPDATA "MigrationToolkit\ICD-$($pkg.Version)"
+        if (-not (Test-Path (Join-Path $dest 'ICD.exe'))) {
+            try {
+                New-Item -ItemType Directory -Path $dest -Force -WhatIf:$false | Out-Null
+                robocopy $pkg.InstallLocation $dest /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+            } catch {}
+        }
+        $exe = Get-ChildItem $dest -Recurse -Filter ICD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($exe) { $list += [pscustomobject]@{ Exe = $exe.FullName; Root = $dest; Source = 'Store (copied out)'; Launch = $null } }
+        else { Write-Warn2 "Could not copy the Store designer out of $($pkg.InstallLocation)." }
+    }
+    $list
+}
 function Invoke-Icd($Wcd, [string[]]$IcdArgs, [string]$Log) {
-    # ADK version: run ICD.exe directly. Store version: run it inside its own package context.
-    if ($Wcd.Source -eq 'ADK') { & $Wcd.Exe @IcdArgs 2>&1 | Out-String | Add-Content $Log; return }
-    $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' | Sort-Object Version -Descending | Select-Object -First 1
-    $appId = try { @((Get-AppxPackageManifest $pkg).Package.Applications.Application)[0].Id } catch { 'App' }
-    Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId $appId -Command $Wcd.Exe -Args ($IcdArgs -join ' ') -PreventBreakaway
-    # Invoke-CommandInDesktopPackage doesn't wait: poll for the package for up to 3 minutes
-    $out = ($IcdArgs | Where-Object { $_ -like '/PackagePath:*' }) -replace '^/PackagePath:"?|"$', ''
-    $until = (Get-Date).AddMinutes(3)
-    while (-not (Test-Path $out) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 5 }
+    $out = "$Log.out"; $err = "$Log.err"
+    $p = Start-Process -FilePath $Wcd.Exe -ArgumentList $IcdArgs -WorkingDirectory (Split-Path $Wcd.Exe) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $text = ((Get-Content $out, $err -Raw -ErrorAction SilentlyContinue) -join "`n").Trim()
+    Add-Content $Log "[$($Wcd.Source)] $($Wcd.Exe) exit $($p.ExitCode)`n$text`n" -WhatIf:$false
+    Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0) { throw "ICD exit code $($p.ExitCode). $(($text -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 3) -join ' | ')" }
 }
 function Install-AdkIcd {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
-    Write-Host 'Installing the Windows ADK "Configuration Designer" feature only (silent, a few minutes)...' -ForegroundColor Cyan
-    winget install --id Microsoft.WindowsADK --accept-package-agreements --accept-source-agreements --silent --override '/features OptionId.ICDConfigurationDesigner /quiet /norestart /ceip off' | Out-Host
-    $w = Find-Wcd
-    if ($w -and $w.Source -eq 'ADK') { Write-Ok 'Configuration Designer (ADK) installed'; return $w }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Warn2 'winget is not available, so the ADK designer cannot be installed automatically.'; return $null }
+    Write-Host 'Installing the Windows ADK Configuration Designer only (silent, about 5 minutes; Windows may ask once to allow it)...' -ForegroundColor Cyan
+    winget install --id Microsoft.WindowsADK --accept-package-agreements --accept-source-agreements --silent --override '/features OptionId.ImagingAndConfigurationDesigner OptionId.ICDConfigurationDesigner /quiet /norestart /ceip off' | Out-Host
+    $w = Find-Wcd | Where-Object Source -eq 'ADK'
+    if ($w) { Write-Ok 'Configuration Designer (ADK) installed'; return $w }
+    Write-Warn2 'ADK install finished but ICD.exe was not found.'
     $null
 }
 
 function Invoke-BuildPackage {
     Write-Step 'Build the enrolment package (run on your admin PC)'
     $wcd = Find-Wcd
-    if ($wcd) { Write-Ok "Windows Configuration Designer found ($($wcd.Source) version)" } else { $wcd = Install-Wcd; if (-not $wcd) { return } }
+    if ($wcd) { Write-Ok "Windows Configuration Designer found ($($wcd.Source) version)" }
 
     if (-not $DestinationTenantId) { $DestinationTenantId = Read-Host 'Destination tenant ID (GUID)' }
     if (-not $DestinationAdmin) { $DestinationAdmin = Read-Host 'Destination admin sign-in (e.g. admin@contoso.com)' }
@@ -369,10 +396,11 @@ function Invoke-BuildPackage {
         $xmlPath = Join-Path $WorkFolder "$name.customizations.xml"
         $xml | Set-Content $xmlPath -Encoding UTF8 -WhatIf:$false
         $bprt = $null
-        $attempts = @($wcd)
-        foreach ($w in $attempts + @('ADK')) {
-            if ($w -eq 'ADK') { if ($wcd.Source -eq 'ADK') { break }; $w = Install-AdkIcd; if (-not $w) { break } }
-            if (-not $w.Exe) { continue }
+        $tried = @()
+        $cands = @(Get-IcdCandidates $wcd)
+        foreach ($w in $cands + @('ADK')) {
+            if ($w -eq 'ADK') { if ($tried -contains 'ADK') { break }; $w = Install-AdkIcd; if (-not $w) { break } }
+            $tried += $w.Source
             $storeFile = Get-ChildItem $w.Root -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
             $icdArgs = @('/Build-ProvisioningPackage', "/CustomizationXML:`"$xmlPath`"", "/PackagePath:`"$ppkg`"", '+Overwrite')
             if ($storeFile) { $icdArgs += "/StoreFile:`"$($storeFile.FullName)`"" }
@@ -390,6 +418,12 @@ function Invoke-BuildPackage {
         return
     }
 
+    if (-not $AllowWizard) {
+        Write-Warn2 "The package was not built. Nothing was opened. Build log: $log"
+        Write-Host 'Paste the warning lines above (and the log) to fix it. Add -AllowWizard to fall back to the Windows Configuration Designer wizard.' -ForegroundColor Yellow
+        return
+    }
+    if (-not $wcd) { $wcd = Install-Wcd; if (-not $wcd) { return } }
     # Guided: Windows Configuration Designer's own wizard (requests its own token)
     Write-Step 'Guided: build it in Windows Configuration Designer (about 3 minutes)'
     Write-Host @"

@@ -208,6 +208,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.6 | 2026-11-10 | Move-TenantDevices 1.0.6: option 1 is no-touch. Builds from the command line (ADK designer, or the Store designer copied out of its sandbox), installs the ADK designer silently if needed, shows the exact error and never opens the wizard unless `-AllowWizard`. |
 | 1.2.5 | 2026-11-10 | Move-TenantDevices 1.0.5: option 1 signs in interactively (Windows sign-in broker, then browser) so MFA and Conditional Access apply. Device code only with `-UseDeviceCode`. |
 | 1.2.4 | 2026-11-10 | Move-TenantDevices 1.0.4: option 1 builds the package with no clicks (real bulk token, silent ICD build) |
 | 1.2.3 | 2026-11-10 | Move-TenantDevices 1.0.3: guided build finds the new .ppkg itself |
