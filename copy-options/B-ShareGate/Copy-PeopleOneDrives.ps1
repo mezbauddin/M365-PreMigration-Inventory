@@ -46,12 +46,12 @@
 
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Copy-PeopleOneDrives.ps1 -MappingFile .\Mapping-PostCutover\UserMapping.csv `
-        -Users kim, lee, sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
+        -Users kim,lee,sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
         -DestinationAdminUrl https://contoso-admin.sharepoint.com -DestinationAdmin admin@contoso.com -SgumFile .\Mapping-PostCutover\UserMapping.sgum
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
+    Version : 1.0.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -59,9 +59,10 @@
               ShareGate Migrate Pro or Enterprise, Microsoft.Online.SharePoint.PowerShell, SharePoint admin in both
               tenants. Not sponsored by ShareGate.
     Changelog:
+      1.0.1  2026-11-10  -Users accepts 'a,b,c' from powershell.exe -File (no positional spill into other parameters).
       1.0.0  2026-11-10  First release, from a live cutover where guessed OneDrive URLs failed in both tenants.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)][string]$MappingFile,
     [Parameter(Mandatory)][string[]]$Users,
@@ -91,6 +92,8 @@ $map = @(Import-Csv $MappingFile)
 foreach ($c in 'Source', 'Destination') { if (-not ($map | Get-Member -Name $c)) { throw "$MappingFile needs a '$c' column." } }
 
 # Who
+# powershell.exe -File passes "a, b, c" as separate words or one string: accept commas and spaces either way
+$Users = @($Users | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
 $people = foreach ($u in $Users) {
     $u = $u.Trim().ToLower()
     $row = @($map | Where-Object { $_.Source.ToLower() -eq $u -or $_.Source.ToLower() -like "$u@*" })

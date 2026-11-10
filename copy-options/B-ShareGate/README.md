@@ -8,7 +8,7 @@
 | Version | 2.0.0 |
 | Tested | Production, on a small business tenant: mailboxes with large archives, SharePoint, Teams and OneDrive |
 | Tool version | ShareGate Migrate 26.11 |
-| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0, [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) 1.0.0 |
+| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0, [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) 1.0.1 |
 | Licence | MIT (this page and script; ShareGate itself is a paid product) |
 
 Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
@@ -125,7 +125,7 @@ After a cutover, both tenants rename OneDrive URLs in the background, so a guess
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\Copy-PeopleOneDrives.ps1 -MappingFile .\Mapping-PostCutover\UserMapping.csv `
-    -Users kim, lee, sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
+    -Users kim,lee,sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
     -DestinationAdminUrl https://contoso-admin.sharepoint.com -DestinationAdmin admin@contoso.com -SgumFile .\Mapping-PostCutover\UserMapping.sgum
 ```
 
