@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.3
+    Version : 1.2.4
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,7 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.4  2026-11-10  Option 5 says how many files it is re-permissioning, that it takes a while, and when pass 1 ends.
       1.2.3  2026-11-10  Option 5: icacls 'Access is denied' on legacy junctions no longer aborts the handover under
                          Windows PowerShell; ownership verified instead. If a profile is still open, offers a restart.
                          New -Action Update (menu 8) pulls the latest version.
@@ -1026,9 +1027,12 @@ function Invoke-HandoverProfile {
         $sidRef = "*$($new.Sid)"
         # icacls reports "Access is denied" for the legacy junctions every profile has (Application Data, Cookies...).
         # Expected and harmless. Windows PowerShell turns native stderr into terminating errors under 'Stop', so relax it here.
+        $count = (Get-ChildItem $old.Path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object).Count
+        Write-Host "Changing owner and permissions on $count files in two passes. This shows nothing while it works and can take 10 to 30 minutes on a full profile. Do not close this window." -ForegroundColor Yellow
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
             icacls "$($old.Path)" /setowner "$sidRef" /T /C /Q 2>&1 | ForEach-Object { "$_" } | Add-Content $log -WhatIf:$false
+            Write-Host "   Pass 1 of 2 done (owner) $(Get-Date -Format HH:mm). Now pass 2 (permissions)..." -ForegroundColor Cyan
             icacls "$($old.Path)" /grant "${sidRef}:(OI)(CI)F" /T /C /Q 2>&1 | ForEach-Object { "$_" } | Add-Content $log -WhatIf:$false
         }
         finally { $ErrorActionPreference = $eap }
