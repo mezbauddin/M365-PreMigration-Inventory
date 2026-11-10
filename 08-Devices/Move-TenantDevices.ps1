@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.0
+    Version : 1.1.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.1.1  2026-11-10  Relaunches itself in 64-bit PowerShell when started from 32-bit (x86) PowerShell, where dsregcmd
+                         is not found.
       1.1.0  2026-11-10  Option 7: clean up the admin PC (designer copies, temp files, sign-in setting, build logs, and on
                          confirmation Windows Configuration Designer and the ADK). Keeps .ppkg files.
       1.0.10 2026-11-10  Option 1 build: absolute work folder paths (ICD runs from its own folder); ADK designer run from a
@@ -147,6 +149,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# 32-bit PowerShell on 64-bit Windows can't see dsregcmd, manage-bde and parts of the registry: relaunch as 64-bit
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $ps64 = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    Write-Host 'This is 32-bit PowerShell (x86). Restarting in 64-bit PowerShell...' -ForegroundColor Yellow
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+    foreach ($k in $PSBoundParameters.Keys) { $v = $PSBoundParameters[$k]; if ($v -is [switch]) { if ($v) { $argList += "-$k" } } else { $argList += "-$k"; $argList += "$v" } }
+    & $ps64 @argList
+    return
+}
 $script:Repo = 'https://raw.githubusercontent.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit/main/08-Devices'
 if (-not $WorkFolder) { $WorkFolder = if (Test-Path 'C:\') { 'C:\MigrationBackup' } else { Join-Path (Get-Location) 'DeviceMigration' } }
 New-Item -ItemType Directory -Path $WorkFolder -Force -WhatIf:$false | Out-Null
