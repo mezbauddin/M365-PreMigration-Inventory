@@ -77,7 +77,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.9
+    Version : 1.0.10
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -87,6 +87,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.10 2026-11-10  Option 1 build: absolute work folder paths (ICD runs from its own folder); ADK designer run from a
+                         private copy with the missing Microsoft.Diagnostics.Tracing.EventSource.dll added.
       1.0.9  2026-11-10  Option 1 sign-in no longer depends on MSAL files from other modules: plain OAuth code flow in a
                          sign-in window, then the system browser with PKCE.
       1.0.8  2026-11-10  Option 1 asks nothing: tenant, account and package name come from the sign-in (-PackageName,
@@ -140,6 +142,7 @@ $ErrorActionPreference = 'Stop'
 $script:Repo = 'https://raw.githubusercontent.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit/main/08-Devices'
 if (-not $WorkFolder) { $WorkFolder = if (Test-Path 'C:\') { 'C:\MigrationBackup' } else { Join-Path (Get-Location) 'DeviceMigration' } }
 New-Item -ItemType Directory -Path $WorkFolder -Force -WhatIf:$false | Out-Null
+$WorkFolder = (Resolve-Path -LiteralPath $WorkFolder).Path   # absolute: tools run from their own folder
 $script:StateFile = Join-Path $WorkFolder 'state.json'
 $script:Stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 
@@ -379,24 +382,52 @@ function Get-BulkToken($SignIn, [int]$Days) {
     if ($r.resultData -is [string] -and $r.resultData.Length -gt 200) { return $r.resultData }
     throw 'Bulk token request succeeded but no token was found in the response.'
 }
+function Get-EventSourceDll {
+    # ADK 10.1.26100+ ships ICD.exe without Microsoft.Diagnostics.Tracing.EventSource.dll, so it crashes on start.
+    # Take it from the Store designer if present, otherwise from its NuGet package (version 1.1.28).
+    $cache = Join-Path $env:LOCALAPPDATA 'MigrationToolkit\EventSource'
+    $dll = Get-ChildItem $cache -Recurse -Filter 'Microsoft.Diagnostics.Tracing.EventSource.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($dll) { return $dll.FullName }
+    $dll = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'MigrationToolkit') -Recurse -Filter 'Microsoft.Diagnostics.Tracing.EventSource.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($dll) { return $dll.FullName }
+    try {
+        New-Item -ItemType Directory -Path $cache -Force -WhatIf:$false | Out-Null
+        $zip = Join-Path $cache 'eventsource.zip'
+        Invoke-WebRequest 'https://www.nuget.org/api/v2/package/Microsoft.Diagnostics.Tracing.EventSource.Redist/1.1.28' -OutFile $zip -UseBasicParsing
+        Expand-Archive $zip -DestinationPath $cache -Force
+        $dll = Get-ChildItem $cache -Recurse -Filter 'Microsoft.Diagnostics.Tracing.EventSource.dll' | Where-Object { $_.FullName -match 'net4' } | Select-Object -First 1
+        if ($dll) { return $dll.FullName }
+    } catch { Write-Warn2 "Could not download the EventSource library: $($_.Exception.Message)" }
+    $null
+}
+function Copy-IcdLocal([string]$From, [string]$Name) {
+    # Private copy under LocalAppData: runs without admin and can be patched without touching Program Files
+    $dest = Join-Path $env:LOCALAPPDATA "MigrationToolkit\$Name"
+    if (-not (Test-Path (Join-Path $dest 'ICD.exe'))) {
+        New-Item -ItemType Directory -Path $dest -Force -WhatIf:$false | Out-Null
+        robocopy $From $dest /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    }
+    if (-not (Test-Path (Join-Path $dest 'ICD.exe'))) { return $null }
+    if (-not (Test-Path (Join-Path $dest 'Microsoft.Diagnostics.Tracing.EventSource.dll'))) {
+        $es = Get-EventSourceDll
+        if ($es) { Copy-Item $es $dest -Force -WhatIf:$false }
+    }
+    $dest
+}
 function Get-IcdCandidates([object]$Wcd) {
-    # Command-line builders, most reliable first. The Store app can't be driven from the command line inside its
-    # sandbox, so its files are copied out to a private folder and ICD.exe runs from there (no admin needed).
+    # Command-line builders. Both are run from a private copy: the Store app can't be driven from the command line
+    # inside its sandbox, and the current ADK build is missing a library it needs.
     $list = @()
-    $adk = Find-Wcd | Where-Object Source -eq 'ADK'
-    if ($adk) { $list += $adk }
     $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
     if ($pkg) {
-        $dest = Join-Path $env:LOCALAPPDATA "MigrationToolkit\ICD-$($pkg.Version)"
-        if (-not (Test-Path (Join-Path $dest 'ICD.exe'))) {
-            try {
-                New-Item -ItemType Directory -Path $dest -Force -WhatIf:$false | Out-Null
-                robocopy $pkg.InstallLocation $dest /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-            } catch {}
-        }
-        $exe = Get-ChildItem $dest -Recurse -Filter ICD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($exe) { $list += [pscustomobject]@{ Exe = $exe.FullName; Root = $dest; Source = 'Store (copied out)'; Launch = $null } }
-        else { Write-Warn2 "Could not copy the Store designer out of $($pkg.InstallLocation)." }
+        $exeDir = Get-ChildItem $pkg.InstallLocation -Recurse -Filter ICD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        $d = if ($exeDir) { Copy-IcdLocal $exeDir.DirectoryName "ICD-Store-$($pkg.Version)" }
+        if ($d) { $list += [pscustomobject]@{ Exe = (Join-Path $d 'ICD.exe'); Root = $d; Source = 'Store (copied out)'; Launch = $null } }
+    }
+    $adk = Find-Wcd | Where-Object Source -eq 'ADK'
+    if ($adk) {
+        $d = Copy-IcdLocal $adk.Root 'ICD-ADK'
+        if ($d) { $list += [pscustomobject]@{ Exe = (Join-Path $d 'ICD.exe'); Root = $d; Source = 'ADK (copied out)'; Launch = $null } }
     }
     $list
 }
@@ -465,7 +496,12 @@ function Invoke-BuildPackage {
         $tried = @()
         $cands = @(Get-IcdCandidates $wcd)
         foreach ($w in $cands + @('ADK')) {
-            if ($w -eq 'ADK') { if ($tried -contains 'ADK') { break }; $w = Install-AdkIcd; if (-not $w) { break } }
+            if ($w -eq 'ADK') {
+                if ($tried -like 'ADK*') { break }
+                $w = Install-AdkIcd; if (-not $w) { break }
+                $d = Copy-IcdLocal $w.Root 'ICD-ADK'; if (-not $d) { break }
+                $w = [pscustomobject]@{ Exe = (Join-Path $d 'ICD.exe'); Root = $d; Source = 'ADK (copied out)'; Launch = $null }
+            }
             $tried += $w.Source
             $storeFile = Get-ChildItem $w.Root -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
             $icdArgs = @('/Build-ProvisioningPackage', "/CustomizationXML:`"$xmlPath`"", "/PackagePath:`"$ppkg`"", '+Overwrite')

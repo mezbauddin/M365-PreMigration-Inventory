@@ -186,6 +186,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 ## Tips and traps
 
+- **The current ADK designer crashes from the command line.** ICD.exe in ADK 10.1.26100 and later is missing `Microsoft.Diagnostics.Tracing.EventSource.dll` (FileNotFoundException). Option 1 runs a private copy with that file added from its NuGet package (1.1.28).
 - **Device code is often blocked.** Many tenants block device code flow with Conditional Access. Option 1 signs in with the Windows sign-in broker or the browser instead, so MFA and Conditional Access apply as normal. Use `-UseDeviceCode` only if you know it is allowed.
 - **Trap: no local admin, no way back.** Disconnecting from Entra ID removes the only admin account many devices have. Create a local admin, and test it, before you disconnect.
 - **Trap: a new profile.** Joining the destination creates a new Windows profile for the new account. The old one stays on disk but the person won't see it. Copy what OneDrive didn't hold, or use a profile tool.
@@ -208,6 +209,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.10 | 2026-11-10 | Move-TenantDevices 1.0.10: package build uses absolute paths; the ADK designer (10.1.26100 and later ships without `Microsoft.Diagnostics.Tracing.EventSource.dll`) runs from a private patched copy. |
 | 1.2.9 | 2026-11-10 | Move-TenantDevices 1.0.9: option 1 sign-in is plain PowerShell (OAuth code flow in a sign-in window, then the browser with PKCE). No dependency on MSAL files from other modules. |
 | 1.2.8 | 2026-11-10 | Move-TenantDevices 1.0.8: option 1 asks nothing. Tenant, account and package name come from the sign-in; `-PackageName`, `-TokenDays`, `-RenamePattern` override. Windows broker dropped (AADSTS50011 for the device registration clients). |
 | 1.2.7 | 2026-11-10 | Move-TenantDevices 1.0.7: option 1 sign-in runs in a clean child PowerShell, so it works when Microsoft Graph is already loaded. |
