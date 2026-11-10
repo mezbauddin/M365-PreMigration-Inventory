@@ -60,13 +60,13 @@ Needs `Microsoft.Graph.Authentication`, the Graph scopes `BitLockerKey.Read.All`
 
 ### Move-TenantDevices.ps1 (start here)
 
-One interactive script for the whole device side. Run it with no parameters and pick from the menu. Options 1 to 3 run on your admin PC; 4 to 6 run on each laptop as administrator. Every step that changes a tenant has `-WhatIf`, and nothing is ever wiped, retired or reset.
+One interactive script for the whole device side. Run it with no parameters and pick from the menu. Options 1 to 3 and 7 run on your admin PC; 4 to 6 run on each laptop as administrator. Every step that changes a tenant has `-WhatIf`, and nothing is ever wiped, retired or reset.
 
 #### Where to run what
 
 | Options | Run on | Why |
 |---|---|---|
-| 1, 2, 3 > move | Any admin PC. Your own laptop is fine | They only sign in to tenants through Microsoft Graph. Nothing on the PC itself changes |
+| 1, 2, 3 > move, 7 | Any admin PC. Your own laptop is fine | They sign in to tenants. Option 1 installs the designer tools it needs; option 7 removes them again |
 | 3 > capture, 4, 5, 6 | Only the device being moved, as administrator | They read and change that machine: its tenant join, local accounts and profiles |
 | 4 | **Never on your own PC** | Option 4 takes the machine it runs on out of its tenant. On your admin laptop that means you, not the user, lose your work account sign-in |
 
@@ -74,16 +74,18 @@ Option 4 has a guard for exactly that mistake. Pass `-SourceTenantId` and stage 
 
 | Option | Where | What it does |
 |---|---|---|
-| 1 Build the enrolment package | Admin PC | Signs in to the destination, gets a bulk enrolment token and builds a `.ppkg` that joins laptops silently. One per tenant, valid up to 180 days. Falls back to guiding you through Windows Configuration Designer |
+| 1 Build the enrolment package | Admin PC | Signs in to the destination, gets a bulk enrolment token and builds a `.ppkg` that joins laptops silently. One per tenant, valid up to 180 days. Asks nothing: tenant and account come from the sign-in. `-RenamePattern`, `-PackageName`, `-TokenDays` to override; `-AllowWizard` to fall back to the designer's wizard |
 | 2 Copy Intune configuration | Admin PC | Exports device configuration, settings catalog, compliance, scripts, remediations, Autopilot profiles and app metadata from the source; imports into the destination; maps group assignments by name; skips anything with the same name already there |
 | 3 Autopilot | Laptop then admin PC | Capture the hardware hash on the laptop; register captured hashes in the destination and remove them from the source |
 | 4 Move this laptop | Laptop | Staged, with the stage saved in `C:\MigrationBackup\state.json`. Stage 1: pre-flight, BitLocker key, printers, Autopilot hash, local admin, leave the old tenant. Stage 2 (after a restart as the local admin): install the package, join. Stage 3: the person signs in once |
 | 5 Hand the old profile over | Laptop | Points the person's new account at their old profile folder, fixes ownership and permissions (files and registry hives), parks the empty new profile. Verifies, and rolls back on any failure |
 | 6 Copy profile data instead | Laptop | Fallback: `Copy-ProfileData.ps1` |
+| 7 Clean up this admin PC | Admin PC | Removes what option 1 installed or left behind: private designer copies, temp files, the sign-in window setting, build logs and, once you confirm, Windows Configuration Designer and the ADK. Keeps your `.ppkg` files |
 
 ```powershell
 # Admin PC, once per destination
-.\Move-TenantDevices.ps1                      # 1, then 2 (with -WhatIf first), then 3 > move
+.\Move-TenantDevices.ps1 -Action BuildPackage -RenamePattern 'TG-%SERIAL%'   # 1: sign in once, nothing else to type
+.\Move-TenantDevices.ps1                      # then 2 (with -WhatIf first), 3 > move, and 7 when you are finished
 
 # Each laptop being moved (never your own PC), as administrator, re-run after each restart until it says Done
 .\Move-TenantDevices.ps1 -Action MoveDevice -SourceTenantId <source-guid> -PackagePath C:\MigrationBackup\contoso-join.ppkg
@@ -94,7 +96,7 @@ Option 4 has a guard for exactly that mistake. Pass `-SourceTenantId` and stage 
 - **Tip:** do one willing person first, end to end, before the rest.
 - **Tip:** option 2 finds nothing in a tenant that never used Intune. That's fine; the laptops still enrol in the destination's Intune automatically on join (MDM enrolment scope).
 - **Trap:** an ordinary sign-in token is not a bulk token. A package built from one won't join anything; the bulk token comes from the `bulkaadjtoken` endpoint, the same one Windows Configuration Designer's "Get Bulk Token" button calls. Option 1 uses it.
-- **Trap:** the bulk token request in option 1 uses the same undocumented sign-in flow as Windows Configuration Designer. If Microsoft changes it, the script opens WCD and tells you what to click. Either way you end up with a `.ppkg`.
+- **Trap:** the bulk token request in option 1 uses the same undocumented sign-in flow as Windows Configuration Designer. If Microsoft changes it, option 1 stops with the exact error and opens nothing; add `-AllowWizard` to fall back to the designer's wizard.
 - **Trap:** the `.ppkg` joins any device to the tenant. Keep it off shared drives and delete it when the move is done.
 - **Trap:** run stages 2 and 5 from the local admin, never from the person's account. A loaded profile can't be handed over.
 - **Trap:** option 4 on your own admin PC removes it from its tenant. Always pass `-SourceTenantId`, and if the script stops with "joined to ... not the source tenant", you're on the wrong machine.
@@ -187,7 +189,9 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 ## Tips and traps
 
 - **The current ADK designer crashes from the command line.** ICD.exe in ADK 10.1.26100 and later is missing `Microsoft.Diagnostics.Tracing.EventSource.dll` (FileNotFoundException). Option 1 runs a private copy with that file added from its NuGet package (1.1.28).
-- **Device code is often blocked.** Many tenants block device code flow with Conditional Access. Option 1 signs in with the Windows sign-in broker or the browser instead, so MFA and Conditional Access apply as normal. Use `-UseDeviceCode` only if you know it is allowed.
+- **The Windows sign-in broker can't get this token.** The first-party apps allowed to request a device registration token have no broker redirect URI, so WAM fails with AADSTS50011. Option 1 uses a sign-in window instead.
+- **Each bulk token request creates a `package_<guid>` account** in the destination, exactly as the designer does. Failed or repeated runs leave extra ones; delete the unused ones, never the one behind the package you are using (deleting it kills that package).
+- **Device code is often blocked.** Many tenants block device code flow with Conditional Access. Option 1 signs in with a Microsoft sign-in window or the browser instead, so MFA and Conditional Access apply as normal. Use `-UseDeviceCode` only if you know it is allowed.
 - **Trap: no local admin, no way back.** Disconnecting from Entra ID removes the only admin account many devices have. Create a local admin, and test it, before you disconnect.
 - **Trap: a new profile.** Joining the destination creates a new Windows profile for the new account. The old one stays on disk but the person won't see it. Copy what OneDrive didn't hold, or use a profile tool.
 - **Trap: cached credentials hide the problem.** Blocking source sign-in doesn't stop a device logging on with cached credentials until the cache expires. Don't treat "they can still log on" as success.
@@ -209,6 +213,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.3.0 | 2026-11-10 | Move-TenantDevices 1.1.0: option 7 cleans up the admin PC (designer copies, temp files, sign-in setting, build logs, and on confirmation Windows Configuration Designer and the ADK). Keeps .ppkg files. |
 | 1.2.10 | 2026-11-10 | Move-TenantDevices 1.0.10: package build uses absolute paths; the ADK designer (10.1.26100 and later ships without `Microsoft.Diagnostics.Tracing.EventSource.dll`) runs from a private patched copy. |
 | 1.2.9 | 2026-11-10 | Move-TenantDevices 1.0.9: option 1 sign-in is plain PowerShell (OAuth code flow in a sign-in window, then the browser with PKCE). No dependency on MSAL files from other modules. |
 | 1.2.8 | 2026-11-10 | Move-TenantDevices 1.0.8: option 1 asks nothing. Tenant, account and package name come from the sign-in; `-PackageName`, `-TokenDays`, `-RenamePattern` override. Windows broker dropped (AADSTS50011 for the device registration clients). |

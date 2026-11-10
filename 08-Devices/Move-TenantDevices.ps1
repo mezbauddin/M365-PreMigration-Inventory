@@ -18,7 +18,8 @@
     Menu
       1  Build the enrolment package      admin PC   Signs in to the destination, gets a bulk enrolment token, builds
                                                       a .ppkg that joins laptops silently. One package per tenant,
-                                                      valid up to 180 days. Falls back to Windows Configuration Designer.
+                                                      valid up to 180 days. No prompts: tenant and account come from
+                                                      the sign-in. -AllowWizard falls back to the designer's wizard.
       2  Copy Intune configuration        admin PC   Exports policies, compliance, scripts, remediations, Autopilot
                                                       profiles and app metadata from the source, imports into the
                                                       destination, maps group assignments by name. -WhatIf first.
@@ -34,9 +35,14 @@
                                                       permissions, parks the empty new profile. Verified, with rollback.
       6  Copy profile data instead        laptop     Fallback: copies files, old OneDrive, signatures, PSTs, bookmarks
                                                       from the old profile into the new one (Copy-ProfileData.ps1).
+      7  Clean up this admin PC           admin PC   Removes what option 1 installed or left behind: private designer
+                                                      copies, temp files, the sign-in window setting, build logs, and
+                                                      (if you confirm) Windows Configuration Designer and the ADK
+                                                      designer. Keeps your .ppkg files. -WhatIf shows the list only.
 
 .PARAMETER Action
-    Skip the menu: BuildPackage, CopyIntune, AutopilotCapture, AutopilotMove, MoveDevice, HandoverProfile, CopyProfile.
+    Skip the menu: BuildPackage, CopyIntune, AutopilotCapture, AutopilotMove, MoveDevice, HandoverProfile, CopyProfile,
+    CleanupAdminPC.
 
 .PARAMETER SourceTenantId
     Source tenant ID (GUID). CopyIntune and AutopilotMove sign in to it. MoveDevice uses it as a safety check: if
@@ -77,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.10
+    Version : 1.1.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -87,6 +93,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.1.0  2026-11-10  Option 7: clean up the admin PC (designer copies, temp files, sign-in setting, build logs, and on
+                         confirmation Windows Configuration Designer and the ADK). Keeps .ppkg files.
       1.0.10 2026-11-10  Option 1 build: absolute work folder paths (ICD runs from its own folder); ADK designer run from a
                          private copy with the missing Microsoft.Diagnostics.Tracing.EventSource.dll added.
       1.0.9  2026-11-10  Option 1 sign-in no longer depends on MSAL files from other modules: plain OAuth code flow in a
@@ -117,7 +125,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile')]
+    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile', 'CleanupAdminPC')]
     [string]$Action = 'Menu',
     [string]$WorkFolder,
     [string]$PackagePath,
@@ -935,6 +943,35 @@ function Invoke-CopyProfile {
     if (-not $WhatIfPreference) { Add-State 'Stage' 'Done'; Invoke-BitLockerBackup }
 }
 
+# ---------------------------------------------------------------- 7. clean up the admin PC
+function Invoke-CleanupAdminPC {
+    Write-Step 'Clean up this admin PC (what option 1 installed or left behind)'
+    $items = @()
+    $tk = Join-Path $env:LOCALAPPDATA 'MigrationToolkit'
+    if (Test-Path $tk) { $items += [pscustomobject]@{ What = "Private designer copies and temp files ($tk)"; Do = { Remove-Item $tk -Recurse -Force } } }
+    $fe = 'HKCU:\Software\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION'
+    if ((Get-ItemProperty $fe -Name 'powershell.exe' -ErrorAction SilentlyContinue)) { $items += [pscustomobject]@{ What = 'Sign-in window rendering setting for powershell.exe (HKCU)'; Do = { Remove-ItemProperty $fe -Name 'powershell.exe' } } }
+    $logs = @(Get-ChildItem $WorkFolder -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ICD-build-*.log*' -or $_.Name -like '*.customizations.xml' })
+    if ($logs) { $items += [pscustomobject]@{ What = "$($logs.Count) build log(s) in $WorkFolder (your .ppkg files are kept)"; Do = { $logs | Remove-Item -Force } } }
+    $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' -ErrorAction SilentlyContinue
+    if ($pkg) { $items += [pscustomobject]@{ What = "Windows Configuration Designer (Store app $($pkg[0].Version))"; Do = {
+        try { $pkg | Remove-AppxPackage } catch { winget uninstall --id 9NBLGGH4TX22 --source msstore --silent --accept-source-agreements | Out-Host } } } }
+    if (Find-Wcd | Where-Object Source -eq 'ADK') { $items += [pscustomobject]@{ What = 'Windows ADK (Configuration Designer). Windows asks once to allow the uninstall'; Do = {
+        winget uninstall --id Microsoft.WindowsADK --silent --accept-source-agreements | Out-Host } } }
+
+    if (-not $items) { Write-Ok 'Nothing to clean up.'; return }
+    Write-Host 'This will remove:' -ForegroundColor Cyan
+    $items | ForEach-Object { Write-Host "  - $($_.What)" }
+    Write-Host 'It does not touch: your .ppkg files, Microsoft Graph or other PowerShell modules, or anything in either tenant.' -ForegroundColor Gray
+    if ($WhatIfPreference) { Write-Host 'WhatIf: nothing removed.' -ForegroundColor Yellow; return }
+    if ((Read-Choice 'Remove all of the above? (Y/N)' @('Y', 'N', 'y', 'n')) -notin 'Y', 'y') { return }
+    foreach ($i in $items) {
+        try { & $i.Do; Write-Ok "Removed: $($i.What)" } catch { Write-Warn2 "$($i.What): $($_.Exception.Message)" }
+    }
+    $left = @(Get-ChildItem $WorkFolder -Filter *.ppkg -ErrorAction SilentlyContinue)
+    if ($left) { Write-Host "Kept $($left.Count) package(s) in $WorkFolder. Delete them yourself once every laptop has moved: they join devices to the tenant until the token expires." -ForegroundColor Yellow }
+}
+
 # ---------------------------------------------------------------- menu
 if ($Action -eq 'Menu') {
     $st = Get-State
@@ -950,15 +987,18 @@ if ($Action -eq 'Menu') {
    4  Move this laptop to the new tenant (staged, re-run after each restart)
    5  Hand the old profile to the new account (after first sign-in)
    6  Copy profile data into the new profile instead (fallback)
+  Admin PC, when you are finished
+   7  Clean up this admin PC (removes what option 1 installed)
    0  Exit
 "@ -ForegroundColor Cyan
-    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6')) {
+    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6', '7')) {
         '1' { $Action = 'BuildPackage' }
         '2' { $Action = 'CopyIntune' }
         '3' { $Action = if ((Read-Choice 'Capture this device (C) or move captured hashes between tenants (M)?' @('C', 'M', 'c', 'm')) -in 'C', 'c') { 'AutopilotCapture' } else { 'AutopilotMove' } }
         '4' { $Action = 'MoveDevice' }
         '5' { $Action = 'HandoverProfile' }
         '6' { $Action = 'CopyProfile' }
+        '7' { $Action = 'CleanupAdminPC' }
         default { return }
     }
 }
@@ -970,4 +1010,5 @@ switch ($Action) {
     'MoveDevice'       { Invoke-MoveDevice }
     'HandoverProfile'  { Invoke-HandoverProfile }
     'CopyProfile'      { Invoke-CopyProfile }
+    'CleanupAdminPC'   { Invoke-CleanupAdminPC }
 }
