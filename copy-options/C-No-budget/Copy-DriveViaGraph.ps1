@@ -39,7 +39,13 @@
     Working folder. Keep it short (e.g. C:\T2T) to stay clear of Windows path limits. Default .\DriveCopy.
 
 .PARAMETER Name
-    -Upload: only these folder names. Default: every folder under LocalPath.
+    Only these local folder names. Default: every folder under LocalPath (or every row of -CsvPath).
+
+.PARAMETER CsvPath
+    Optional. The copy list from ..\New-DriveCopyList.ps1 (the same CSV the ShareGate script reads). -Download
+    pulls every Source into <LocalPath>\<DestinationFolder>; -Upload pushes each one to its own DestinationSite,
+    DestinationLibrary and DestinationFolder (a blank folder means the library root, for OneDrive to OneDrive).
+    Rows with Status 'Skip' are left out. Replaces -SourceSiteUrl and -DestinationSiteUrl.
 
 .EXAMPLE
     .\Copy-DriveViaGraph.ps1 -Download -TenantId <source-guid> -LocalPath C:\T2T `
@@ -49,10 +55,14 @@
     .\Copy-DriveViaGraph.ps1 -Upload -TenantId <dest-guid> -LocalPath C:\T2T `
         -DestinationSiteUrl https://contoso.sharepoint.com/sites/Archive -DestinationLibrary 'Former Staff OneDrive'
 
+.EXAMPLE
+    .\Copy-DriveViaGraph.ps1 -Download -TenantId <source-guid> -LocalPath C:\T2T -CsvPath ..\DriveCopyList-20261110-2100.csv
+    .\Copy-DriveViaGraph.ps1 -Upload -TenantId <dest-guid> -LocalPath C:\T2T -CsvPath ..\DriveCopyList-20261110-2100.csv
+
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
-    Date    : 2026-11-09
+    Version : 1.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: Microsoft.Graph.Authentication. You need access to every source drive (make yourself site collection
@@ -65,16 +75,49 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
     [string]$LocalPath = '.\DriveCopy',
 
-    [Parameter(ParameterSetName = 'Download', Mandatory)][string[]]$SourceSiteUrl,
+    [string]$CsvPath,
+
+    [Parameter(ParameterSetName = 'Download')][string[]]$SourceSiteUrl,
     [Parameter(ParameterSetName = 'Download')][string]$SourceLibrary = 'Documents',
 
-    [Parameter(ParameterSetName = 'Upload', Mandatory)][string]$DestinationSiteUrl,
-    [Parameter(ParameterSetName = 'Upload', Mandatory)][string]$DestinationLibrary,
+    [Parameter(ParameterSetName = 'Upload')][string]$DestinationSiteUrl,
+    [Parameter(ParameterSetName = 'Upload')][string]$DestinationLibrary,
     [Parameter(ParameterSetName = 'Upload')][string[]]$Name
 )
 
 $ErrorActionPreference = 'Stop'
 $G = 'https://graph.microsoft.com/v1.0'
+
+# ------------------------------------------------------------ what to copy: parameters, or the CSV from New-DriveCopyList
+function Get-LocalName([string]$url, [string]$folder, [bool]$fromCsv) {
+    if ($folder) { return $folder }
+    $seg = ([uri]$url.TrimEnd('/')).Segments[-1].TrimEnd('/')
+    # From a CSV, a OneDrive-to-OneDrive row keeps the whole URL segment so alex_smith and alex_jones can't collide.
+    if ($fromCsv) { return $seg }
+    if ($url -match '/personal/') { $seg.Split('_')[0] } else { $seg }
+}
+$jobs = [System.Collections.Generic.List[object]]::new()
+if ($CsvPath) {
+    $csvRows = @(Import-Csv $CsvPath)
+    foreach ($c in 'Source', 'DestinationSite') { if (-not ($csvRows | Get-Member -Name $c)) { throw "$CsvPath needs a '$c' column." } }
+    foreach ($r in $csvRows) {
+        if ($r.Status -eq 'Skip' -or -not $r.Source -or -not $r.DestinationSite) { Write-Host "Skipping $(if ($r.Owner) { $r.Owner } else { $r.Source }): $($r.Reason)" -ForegroundColor Yellow; continue }
+        $jobs.Add([pscustomobject]@{
+            Source = $r.Source; SourceLibrary = $(if ($r.SourceLibrary) { $r.SourceLibrary } else { $SourceLibrary })
+            Local = Get-LocalName $r.Source $r.DestinationFolder $true
+            Site = $r.DestinationSite; Library = $(if ($r.DestinationLibrary) { $r.DestinationLibrary } else { 'Documents' })
+            Remote = "$($r.DestinationFolder)"
+        })
+    }
+}
+elseif ($Download) {
+    if (-not $SourceSiteUrl) { throw 'Pass -SourceSiteUrl or -CsvPath.' }
+    foreach ($url in $SourceSiteUrl) { $jobs.Add([pscustomobject]@{ Source = $url; SourceLibrary = $SourceLibrary; Local = Get-LocalName $url '' $false }) }
+}
+else {
+    if (-not $DestinationSiteUrl -or -not $DestinationLibrary) { throw 'Pass -DestinationSiteUrl and -DestinationLibrary, or -CsvPath.' }
+}
+if ($Name) { $jobs = [System.Collections.Generic.List[object]]@($jobs | Where-Object { $Name -contains $_.Local }) }
 $scopes = if ($Download) { 'Sites.Read.All', 'Files.Read.All' } else { 'Sites.ReadWrite.All', 'Files.ReadWrite.All' }
 
 Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
@@ -106,11 +149,11 @@ function Get-EncodedPath([string]$rel) { ($rel -split '[\\/]' | Where-Object { $
 
 # ============================================================ DOWNLOAD
 if ($Download) {
-    foreach ($url in $SourceSiteUrl) {
-        $seg = ([uri]$url.TrimEnd('/')).Segments[-1].TrimEnd('/')
-        $who = if ($url -match '/personal/') { $seg.Split('_')[0] } else { $seg }
+    foreach ($job in $jobs) {
+        $url = $job.Source
+        $who = $job.Local
         Write-Host "== $who" -ForegroundColor Cyan
-        try { $drive = Get-DriveId (Get-SiteId $url) $SourceLibrary }
+        try { $drive = Get-DriveId (Get-SiteId $url) $job.SourceLibrary }
         catch { Write-Log $who $url 'Problem' "Can't open: $($_.Exception.Message). Archived OneDrive, or you're not an admin of it?"; continue }
 
         $root = Join-Path $LocalPath $who
@@ -148,9 +191,14 @@ if ($Download) {
 
 # ============================================================ UPLOAD
 if ($Upload) {
-    $drive = Get-DriveId (Get-SiteId $DestinationSiteUrl) $DestinationLibrary
-    $folders = Get-ChildItem -LiteralPath $LocalPath -Directory | Where-Object { -not $Name -or $Name -contains $_.Name }
+    # Without a CSV: every local folder goes into <library>\<folder name> on one site, as before.
+    if (-not $CsvPath) {
+        foreach ($d in Get-ChildItem -LiteralPath $LocalPath -Directory | Where-Object { -not $Name -or $Name -contains $_.Name }) {
+            $jobs.Add([pscustomobject]@{ Local = $d.Name; Site = $DestinationSiteUrl; Library = $DestinationLibrary; Remote = $d.Name })
+        }
+    }
     $made = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $driveCache = @{}
 
     function Confirm-RemoteFolder([string]$rel) {
         $parts = $rel -split '[\\/]' | Where-Object { $_ }
@@ -158,25 +206,35 @@ if ($Upload) {
         foreach ($p in $parts) {
             $parent = $path
             $path = if ($path) { "$path/$p" } else { $p }
-            if ($made.Contains($path)) { continue }
+            if ($made.Contains("$drive|$path")) { continue }
+            if ($WhatIfPreference) { [void]$made.Add("$drive|$path"); continue }   # -WhatIf: don't create folders either
             $uri = if ($parent) { "$G/drives/$drive/root:/$(Get-EncodedPath $parent):/children" } else { "$G/drives/$drive/root/children" }
             $body = @{ name = $p; folder = @{}; '@microsoft.graph.conflictBehavior' = 'fail' } | ConvertTo-Json
             try { Invoke-MgGraphRequest POST $uri -Body $body -ContentType 'application/json' | Out-Null }
             catch { if ("$($_.Exception.Message)$($_.ErrorDetails.Message)" -notmatch 'nameAlreadyExists|409|Conflict') { throw } }
-            [void]$made.Add($path)
+            [void]$made.Add("$drive|$path")
         }
     }
+    function Join-Remote([string]$a, [string]$b) { if ($a) { if ($b) { Join-Path $a $b } else { $a } } else { $b } }
 
-    foreach ($folder in $folders) {
-        $who = $folder.Name
-        Write-Host "== $who" -ForegroundColor Cyan
+    foreach ($job in $jobs) {
+        $who = $job.Local
+        $folder = Get-Item -LiteralPath (Join-Path $LocalPath $who) -ErrorAction SilentlyContinue
+        if (-not $folder) { Write-Log $who (Join-Path $LocalPath $who) 'Problem' 'Local folder not found. Run -Download first'; continue }
+        $key = "$($job.Site)|$($job.Library)"
+        try {
+            if (-not $driveCache.ContainsKey($key)) { $driveCache[$key] = Get-DriveId (Get-SiteId $job.Site) $job.Library }
+            $drive = $driveCache[$key]
+        }
+        catch { Write-Log $who $job.Site 'Problem' "Can't open the destination library: $($_.Exception.Message)"; continue }
+        Write-Host "== $who -> $($job.Site) [$($job.Library)$(if ($job.Remote) { "/$($job.Remote)" })]" -ForegroundColor Cyan
         $files = 0; $bytes = 0; $skipped = 0
-        Confirm-RemoteFolder $who
+        if ($job.Remote) { Confirm-RemoteFolder $job.Remote }
         foreach ($dir in Get-ChildItem -LiteralPath $folder.FullName -Directory -Recurse) {
-            Confirm-RemoteFolder (Join-Path $who $dir.FullName.Substring($folder.FullName.Length + 1))
+            Confirm-RemoteFolder (Join-Remote $job.Remote $dir.FullName.Substring($folder.FullName.Length + 1))
         }
         foreach ($f in Get-ChildItem -LiteralPath $folder.FullName -File -Recurse) {
-            $rel = Join-Path $who $f.FullName.Substring($folder.FullName.Length + 1)
+            $rel = Join-Remote $job.Remote $f.FullName.Substring($folder.FullName.Length + 1)
             $enc = Get-EncodedPath $rel
             try {
                 $existing = $null

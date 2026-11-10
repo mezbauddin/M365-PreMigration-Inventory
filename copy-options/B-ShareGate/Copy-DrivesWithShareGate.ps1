@@ -16,6 +16,8 @@
       DestinationLibrary  Optional. Library on the destination. Default 'Documents'
       DestinationFolder   Optional. Folder inside that library. It must already exist
       SourceLibrary       Optional. Default 'Documents'
+      Status              Optional. Rows with 'Skip' are left out
+    ..\New-DriveCopyList.ps1 builds this CSV for you (and the destination folders, with -CreateFolders).
 
 .PARAMETER CsvPath
     The CSV described above.
@@ -45,8 +47,8 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.1
-    Date    : 2026-11-09
+    Version : 1.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ShareGate Migrate installed on this PC, with a Pro or Enterprise subscription (PowerShell isn't in
@@ -76,6 +78,10 @@ $rows = @(Import-Csv $CsvPath)
 foreach ($c in 'Source', 'DestinationSite') {
     if (-not ($rows | Get-Member -Name $c)) { throw "$CsvPath needs a '$c' column." }
 }
+# Lists from New-DriveCopyList.ps1 carry a Status column. Rows marked Skip (archived, locked, no destination) are left out.
+$skipped = @($rows | Where-Object { $_.Status -eq 'Skip' -or -not $_.Source -or -not $_.DestinationSite })
+if ($skipped) { Write-Host "$($skipped.Count) row(s) marked Skip or incomplete, left out: $(($skipped | ForEach-Object { if ($_.Owner) { $_.Owner } else { $_.Source } }) -join ', ')" -ForegroundColor Yellow }
+$rows = @($rows | Where-Object { $_.Status -ne 'Skip' -and $_.Source -and $_.DestinationSite })
 Write-Host "$($rows.Count) row(s) to copy." -ForegroundColor Cyan
 
 # One browser sign-in per tenant. Every row reuses it.

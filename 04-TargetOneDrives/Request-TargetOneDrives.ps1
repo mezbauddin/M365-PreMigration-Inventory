@@ -25,16 +25,24 @@
 .PARAMETER TimeoutMinutes
     How long -Wait keeps checking. Default 60.
 
+.PARAMETER AdminUpn
+    Optional destination admin sign-in name, e.g. admin@contoso.com. Exchange Online is connected as this account
+    (disconnecting any session for another account first) so addresses are resolved to sign-in names in the right
+    tenant. Without it, an open Exchange Online session is reused as it is.
+
 .EXAMPLE
     .\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com
+
+.EXAMPLE
+    .\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com -AdminUpn admin@contoso.com -Wait
 
 .EXAMPLE
     .\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com -User kim@contoso.com -Wait
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.2
-    Date    : 2026-11-08
+    Version : 1.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: Microsoft.Online.SharePoint.PowerShell, SharePoint Administrator in the destination. Optional:
@@ -47,7 +55,8 @@ param(
     [string]$PlanFile = '.\TargetBuildPlan.csv',
     [string[]]$User = @(),
     [switch]$Wait,
-    [int]$TimeoutMinutes = 60
+    [int]$TimeoutMinutes = 60,
+    [string]$AdminUpn
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +84,20 @@ if (Test-Path $PlanFile) {
 $User | ForEach-Object { $people.Add($_.ToLower()) }
 $people = @($people | Select-Object -Unique)
 if (-not $people) { throw "No users. Pass -User, or run from the folder with $PlanFile." }
+
+# With -AdminUpn, Exchange Online is (re)connected as that account, so the look-up below can't run in the source.
+if ($AdminUpn) {
+    $c = Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected' | Select-Object -First 1
+    if ($c -and "$($c.UserPrincipalName)" -ne $AdminUpn) {
+        Write-Host "Exchange Online is signed in as $($c.UserPrincipalName). Reconnecting as $AdminUpn." -ForegroundColor Yellow
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        $c = $null
+    }
+    if (-not $c) { Connect-ExchangeOnline -UserPrincipalName $AdminUpn -ShowBanner:$false }
+    $c = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
+    if ("$($c.UserPrincipalName)" -ne $AdminUpn) { throw "Exchange Online signed in as $($c.UserPrincipalName), not $AdminUpn." }
+    Write-Host "Signed in as $($c.UserPrincipalName) to tenant $($c.TenantID)" -ForegroundColor Cyan
+}
 
 # A OneDrive belongs to the sign-in name (UPN), which isn't always the mail address in the plan. If Exchange Online
 # is connected, look each one up. Otherwise use the addresses as given.

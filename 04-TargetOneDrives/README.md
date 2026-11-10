@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.1 |
-| Released | 8 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part 4 of my [M365 tenant-to-tenant migration toolkit](../README.md). It reads the same `TargetBuildPlan.csv` that [New-TargetMailboxes](../02-TargetMailboxes/) writes.
@@ -59,7 +59,20 @@ Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
 
 # Preview
 .\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com -WhatIf
+
+# Make sure the sign-in look-up runs in the destination, not whichever tenant was open last
+.\Request-TargetOneDrives.ps1 -AdminUrl https://contoso-admin.sharepoint.com -AdminUpn admin@contoso.onmicrosoft.com
 ```
+
+**Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, connects Exchange Online as the one you named (for the address to sign-in look-up), and prints `Signed in as X to tenant Y`. On the live cutover this would have saved a confusing error at the worst moment.
+
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | ShareGate can't copy into a OneDrive that doesn't exist, and doesn't create them. Run this first whatever tool you use |
+| Microsoft's own | `Request-SPOPersonalSite -UserEmails` by hand, 200 at a time, then `Get-SPOSite -IncludePersonalSite $true` to see which exist. Exactly what this script does, without the report. Native cross-tenant OneDrive migration creates the destination OneDrive itself |
+| By hand | Have each person sign in to office.com once. Their OneDrive appears within minutes. Not possible before cutover, when nobody can sign in yet |
 
 ## Lessons learnt
 
@@ -74,5 +87,6 @@ Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | `-AdminUpn`: connects Exchange Online as the named account (disconnecting any other) so sign-in names are looked up in the right tenant |
 | 1.0.1 | 2026-11-08 | Resolves mail addresses to sign-in names through Exchange Online. Matches new OneDrives by URL as well as owner |
 | 1.0.0 | 2026-11-08 | First release |

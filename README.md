@@ -20,7 +20,9 @@ flowchart LR
     A & S & N --> M[Rebuild config<br/>05 · 06]
     M --> X[Cut over domain<br/>07]
     X --> V[Validate<br/>09]
+    X --> DV[Rejoin devices<br/>08]
     V --> R[Decommission source<br/>10]
+    T[Tools: module health,<br/>migration report] -.-> B & M & X & V
 ```
 
 | Phase | Part | What it does | Changes anything? |
@@ -33,17 +35,26 @@ flowchart LR
 | Copy | [03 EWS archive readiness](03-EwsArchiveReadiness/) | If your tool copies archives over EWS: checks and fixes both tenants. Without it, mail copies and every archive fails | Only with `-Fix` |
 | Rebuild | [05 Mail config](05-MailConfig/) | Permissions, forwarding, distribution lists and contacts, exported and rebuilt. Without it, shared mailboxes arrive that nobody can open | Destination on import. `-WhatIf` |
 | Rebuild | [06 Groups, Teams and sites](06-GroupsTeamsSites/) | Every Microsoft 365 group, Team and SharePoint site exported. Groups created in the destination on your domain, with owners and members, before the copy | Destination on import. `-WhatIf` |
-| Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, release from source, add and verify in destination, old addresses with X500s, sign-in names, temporary passwords | Both tenants, in order. `-WhatIf` |
-| Validate | [09 Validation](09-Validation/) | Checks the destination against the inventory, plan and mapping: types, licences, archives, item counts, addresses, X500s, OneDrives, list members. Pass, warn and fail report | No |
-| Plan and run | [docs](docs/) | [Discovery questionnaire](docs/Discovery-Questionnaire.md), [cutover runbook](docs/Cutover-Runbook.md), [comms templates](docs/Comms-Templates.md), [risk register](docs/Risk-Register.md), [handover template](docs/Handover-Template.md) | No |
+| Copy | [New-DriveCopyList](copy-options/#building-the-onedrive-copy-list-new-drivecopylistps1) | Builds the OneDrive copy list for B and C: leavers into one folder each in an archive library, staff into their new OneDrive, archived OneDrives marked Skip. Creates the folders with `-CreateFolders` | Only with `-CreateFolders` |
+| Cut over | [07 Domain cutover](07-DomainCutover/) | DNS record, add in destination first, release from source, verify, old addresses with X500s, sign-in names, temporary passwords. Plus `Test-CutoverReadiness` (go/no-go), `Export-DomainDns -FullScan` and `Set-DomainDnsRecords` (moving DNS hosting), `Add-TargetDomain -WaitForDns`, and `Block-SourceSignIn` | Both tenants, in order. `-WhatIf` |
+| Cut over | [08 Devices](08-Devices/) | Planned. Rejoin Entra-joined laptops to the destination: back up the profile, leave, join, Intune, sign the apps back in | n/a yet |
+| Validate | [09 Validation](09-Validation/) | Checks the destination against the inventory, plan and mapping: types, licences, archives, item counts, addresses, X500s, OneDrives, list members, the password-change flag, and Conditional Access that will block your test sign-in. Pass, warn and fail report | No |
+| Decommission | [10 Decommission](10-Decommission/) | Planned. Block source sign-in, final incrementals, export and retain, unlicensed OneDrives, remove licences, close the tenant | n/a yet |
+| Any time | [tools](tools/) | `Test-ModuleHealth` finds the Graph module version clash before it stops a script. `Get-MigrationReport` reads every report CSV and shows what still needs a look, on screen or as one HTML page | No (`-Fix` installs modules) |
+| Plan and run | [docs](docs/) | [Discovery questionnaire](docs/Discovery-Questionnaire.md), [cutover runbook](docs/Cutover-Runbook.md), [comms templates](docs/Comms-Templates.md), [risk register](docs/Risk-Register.md), [handover template](docs/Handover-Template.md), [DNS move playbook](docs/DNS-Move-Playbook.md), [lessons learnt](docs/Lessons-Learnt.md) | No |
 
-Coming as the live migration moves on: **08** device rejoin and **10** source decommissioning.
+**08** device rejoin and **10** source decommissioning are written up as plans; their scripts come as the live migration moves on.
+
+## Lessons from a live cutover
+
+The domain moved on 10 November 2026. It worked, and it taught me things no lab did: the DNS host wasn't the registrar and nobody could log in to it, guests in the destination were holding the old addresses, a Graph module version clash stopped a script half way, a Conditional Access policy blocked my own test sign-in from abroad, and the user mapping had to be rebuilt after cutover. Every one of those is now handled by a script or a check. Read [docs/Lessons-Learnt.md](docs/Lessons-Learnt.md) before you set a date.
 
 ## Read this first
 
 1. [Copy options](copy-options/), to decide how the data will move. It changes how you build the destination.
 2. [01 Source inventory](01-SourceInventory/) and the [discovery questionnaire](docs/Discovery-Questionnaire.md), to see what you're dealing with.
 3. [07 Domain cutover](07-DomainCutover/) and the [cutover runbook](docs/Cutover-Runbook.md), so you know what cutover night looks like before you set a date.
+4. [Lessons learnt](docs/Lessons-Learnt.md), and run [tools/Test-ModuleHealth.ps1](tools/) on the PC you'll use.
 
 ## How the parts fit together
 
@@ -51,17 +62,20 @@ Coming as the live migration moves on: **08** device rejoin and **10** source de
 2. Choose your copy option. For **Microsoft native**, read its identity note first: it needs mail users in the destination, not mailboxes.
 3. Run **02 -Plan** in the same folder, review `TargetBuildPlan.csv`, then **02 -Apply -StageOnly** against the destination.
 4. If your tool copies archives over EWS (ShareGate does), run **03** with its app ID and both tenant IDs **before** the mail copy. Then start copying.
-5. Once people are licensed, run **04** so their OneDrives exist. Copy OneDrive after cutover, once sign-in names are final.
+5. Once people are licensed, run **04** so their OneDrives exist. Copy OneDrive after cutover, once sign-in names are final, from the list **New-DriveCopyList** builds.
 6. Run **05 -Export** against the source and **05 -Import** against the destination, so shared mailboxes, lists and forwarding work on day one.
 7. Before copying Teams or SharePoint, run **06 -Export** and **06 -Import**, so the groups exist on the right domain with their members. Then copy into them.
-8. On cutover night, follow **07** in order: snapshot, release, add and verify, switch addresses.
-9. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover.
+8. The day before, run **07 Test-CutoverReadiness**. On cutover night, follow **07** in order: add the domain to the destination and publish its TXT, snapshot, release from the source, verify, switch addresses.
+9. Run **09** after the copy, on cutover night and a few days later. Attach the last report to the handover, with the HTML from **tools/Get-MigrationReport**.
+10. The day after, **07 Block-SourceSignIn**, then rebuild the mapping with **02b** before any incremental.
 
 One mapping file (`Source,Destination`: old address to new sign-in) drives 05, 06, 07, 09, and the user mapping in whichever copy tool you use. Build it with [02b](02b-UserMapping/) after 02, and again after cutover, because sign-in names change.
 
 ## Things that apply everywhere
 
-**Two tenants, one PC.** You'll be signed in to two tenants from the same machine for weeks. Windows quietly reuses your last sign-in, so `Connect-ExchangeOnline` or `Connect-MgGraph` can land you in the wrong tenant without asking. The scripts that change things check the tenant ID first. When you run commands by hand, name the account (`-UserPrincipalName`) or the tenant (`-TenantId`), and check `Get-ConnectionInformation` before anything destructive.
+**Two tenants, one PC.** You'll be signed in to two tenants from the same machine for weeks. Windows quietly reuses your last sign-in, so `Connect-ExchangeOnline` or `Connect-MgGraph` can land you in the wrong tenant without asking. The scripts that change things check the tenant ID first, and take `-AdminUpn`: name the account and they disconnect any other session, sign in as it, and print "Signed in as X to tenant Y" before changing anything. When you run commands by hand, name the account (`-UserPrincipalName`) or the tenant (`-TenantId`), and check `Get-ConnectionInformation` before anything destructive.
+
+**One module version, one fresh window.** Install every Microsoft.Graph module at the same version, and run each task in a fresh PowerShell window. ShareGate's module only loads in Windows PowerShell 5.1; everything else here runs in 7. [tools/Test-ModuleHealth.ps1](tools/) checks all of it.
 
 **EWS ends on 1 April 2027.** Tools and scripts that copy archives over EWS stop working then. Move big archives before it.
 

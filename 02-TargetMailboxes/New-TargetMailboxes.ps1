@@ -77,6 +77,11 @@
     With -Apply: give every person a new temporary password, even if their account is already enabled. Useful at
     cutover, when you hand passwords out.
 
+.PARAMETER AdminUpn
+    With -Apply: optional destination admin sign-in name, e.g. admin@contoso.com. If Exchange Online or Graph is
+    already signed in as someone else, the script disconnects and signs in again as this account. Use it whenever
+    both tenants are open on one PC.
+
 .EXAMPLE
     .\New-TargetMailboxes.ps1 -Plan -TargetDomain contoso.onmicrosoft.com -Exclude admin@fabrikam.com
 
@@ -86,10 +91,13 @@
 .EXAMPLE
     .\New-TargetMailboxes.ps1 -Apply -TargetDomain contoso.onmicrosoft.com -UsageLocation GB
 
+.EXAMPLE
+    .\New-TargetMailboxes.ps1 -Apply -TargetDomain contoso.onmicrosoft.com -UsageLocation GB -AdminUpn admin@contoso.com
+
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 2.0.2
-    Date    : 2026-11-07
+    Version : 2.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Authentication, Microsoft.Graph.Users,
@@ -117,7 +125,8 @@ param(
     [Parameter(ParameterSetName = 'Apply')][switch]$StageOnly,
     [Parameter(ParameterSetName = 'Apply')][switch]$SharedMailboxesOnly,
     [Parameter(ParameterSetName = 'Apply')][string]$StagingSmtpDomain,
-    [Parameter(ParameterSetName = 'Apply')][switch]$ResetPasswords
+    [Parameter(ParameterSetName = 'Apply')][switch]$ResetPasswords,
+    [Parameter(ParameterSetName = 'Apply')][string]$AdminUpn
 )
 
 $ErrorActionPreference = 'Stop'
@@ -227,9 +236,24 @@ if ($StageOnly -and $SharedMailboxesOnly) { throw 'Use -StageOnly or -SharedMail
 if (-not (Test-Path $PlanFile)) { throw "No $PlanFile. Run -Plan first." }
 $planRows = @(Import-Csv $PlanFile | Where-Object { $_.Include -eq 'True' })
 
+# With -AdminUpn, sessions open for another account are closed first, so Windows can't quietly reuse them.
+if ($AdminUpn) {
+    $mg = Get-MgContext
+    if ($mg -and $mg.Account -ne $AdminUpn) { Write-Host "Graph is signed in as $($mg.Account). Reconnecting." -ForegroundColor Yellow; Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
+    $c = Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected' | Select-Object -First 1
+    if ($c -and "$($c.UserPrincipalName)" -ne $AdminUpn) { Write-Host "Exchange Online is signed in as $($c.UserPrincipalName). Reconnecting." -ForegroundColor Yellow; Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null }
+}
 Connect-MgGraph -TenantId $TargetDomain -NoWelcome -Scopes 'User.ReadWrite.All', 'User-PasswordProfile.ReadWrite.All',
     'Organization.Read.All', 'Directory.Read.All'
-Connect-ExchangeOnline -ShowBanner:$false
+$exoArgs = @{ ShowBanner = $false }
+if ($AdminUpn) { $exoArgs.UserPrincipalName = $AdminUpn }
+Connect-ExchangeOnline @exoArgs
+if ($AdminUpn) {
+    if ((Get-MgContext).Account -ne $AdminUpn) { throw "Graph signed in as $((Get-MgContext).Account), not $AdminUpn. Run Disconnect-MgGraph and pick the right account." }
+    $c = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
+    if ("$($c.UserPrincipalName)" -ne $AdminUpn) { throw "Exchange Online signed in as $($c.UserPrincipalName), not $AdminUpn." }
+}
+Write-Host "Signed in as $((Get-MgContext).Account) to tenant $((Get-MgContext).TenantId)" -ForegroundColor Cyan
 
 # Safety: refuse to run against the wrong tenant.
 $graphDomains = @((Get-MgDomain).Id)

@@ -1,12 +1,12 @@
 # Test-TargetTenant
 
-**TL;DR:** A read-only check of the destination against everything the earlier parts recorded. For every row in your mapping file it checks the recipient exists, has the right type, licence and archive, has about as many items as the source did, and after cutover has its old address, sign-in name and X500 address. It can also check OneDrives and distribution list membership. You get a CSV of Pass, Warn and Fail rows and a summary table. Nothing in the tenant is changed.
+**TL;DR:** A read-only check of the destination against everything the earlier parts recorded. For every row in your mapping file it checks the recipient exists, has the right type, licence and archive, has about as many items as the source did, and after cutover has its old address, sign-in name and X500 address. It checks people must change their temporary password, and flags Conditional Access that will block your own test sign-ins and a missing MFA policy. It can also check OneDrives and distribution list membership. You get a CSV of Pass, Warn and Fail rows and a summary table. Nothing in the tenant is changed.
 
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
-| Released | 9 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part 9 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run it after the main copy, again on cutover night once [07](../07-DomainCutover/) has finished, and once more a few days later.
@@ -41,6 +41,9 @@ This pulls it together. It reads the inventory from [01](../01-SourceInventory/)
 | OneDrive | People (Kind User) have a OneDrive for their sign-in name | `-SharePointAdminUrl` and the plan |
 | Mapping | Plan rows that aren't in the mapping file | The plan |
 | ListMembers | Distribution list member counts against the 05 export | `-MailConfigFolder` |
+| Password | People (Kind User) have "must change password at next sign-in" on. With `-CutoverDate`, a password already changed after cutover passes as informational | The plan |
+| CA-Location | Every enabled or report-only Conditional Access policy with a location condition, as a Warn | Policy.Read.All. Skip with `-SkipTenantChecks` |
+| MFA | Warn if no enabled policy requires MFA for all users and security defaults are off. A finding, nothing is changed | Policy.Read.All |
 
 How the results are judged:
 
@@ -70,7 +73,13 @@ How the results are judged:
 
 # Stricter on item counts
 .\Test-TargetTenant.ps1 ... -Tolerance 2
+
+# The morning after: name the account, and tell it when cutover was
+.\Test-TargetTenant.ps1 -TenantId <destination-tenant-guid> -AdminUpn admin@contoso.onmicrosoft.com `
+    -InventoryFolder .\Inventory-fabrikam-<date> -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate 2026-11-10
 ```
+
+**Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, signs in to Exchange Online and Graph as the one you named, and prints `Signed in as X to tenant Y`. On the live cutover this would have saved a confusing error at the worst moment.
 
 Run it from the folder with `TargetBuildPlan.csv`, or pass `-PlanFile`.
 
@@ -88,10 +97,22 @@ The CSV contains names and addresses. Keep it out of source control and shared d
 - **More items isn't always good news.** After cutover, new mail pushes the count up and that's fine. Before cutover, a mailbox well above the source can mean a re-copy made duplicates. Worth a look.
 - **Keep the mapping file honest.** Everything is checked through it. If someone was added to the plan late and never made it into the mapping, the Mapping check flags them, but nothing else about them is checked until you add the row.
 - **Run it more than once.** Before cutover it tells you what's left to copy. On the night it tells you whether cutover worked. A few days later it catches anything that drifted, like a licence someone removed.
+- **The password flag matters.** A temporary password handed out on cutover night should stop working the first time it's used. If the change-at-next-sign-in flag is off, it stays valid until someone changes it, and it was probably written on paper. Graph returns an empty value rather than False when the flag is off, so the script treats empty as off.
+- **Test sign-ins from where the users are.** The destination on the live cutover had a "block outside allowed countries" policy. I was testing from abroad, and every test sign-in failed with error 53003. The accounts were fine. The CA-Location warning is there so you know before you panic.
+- **Report the MFA gap, don't fix it.** No MFA policy is a real finding, and it goes in the handover for the business owner. Changing security policy in a tenant that hosts other companies isn't part of a migration.
 - **Use it for sign-off.** The summary table is the closest thing to a straight answer when the business asks if it's finished. I attach the CSV to the handover.
+
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | ShareGate's task reports show what it copied and what it skipped, item by item. They say nothing about addresses, X500s, licences or sign-in. Use both |
+| Microsoft's own | Exchange admin centre and Entra admin centre, person by person: type, licence, addresses, sign-in name. `Get-EXOMailboxStatistics` for counts. Sign-in logs for 53003 failures |
+| By hand | A spreadsheet of every person with a column per check, filled in from the admin centres. Accurate for ten people, if you have an afternoon |
 
 ## Changelog
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | `-AdminUpn`. Password, CA-Location and MFA checks. `-CutoverDate`, `-SkipTenantChecks` |
 | 1.0.0 | 2026-11-09 | First release |

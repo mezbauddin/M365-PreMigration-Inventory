@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
-| Released | 9 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part of my [M365 tenant-to-tenant migration toolkit](../README.md).
@@ -24,6 +24,8 @@ The scripts move things. What sinks most migrations I've seen isn't a failed scr
 | [Cutover runbook](Cutover-Runbook.md) | T-14 to T+7 | Day-by-day steps that call the toolkit scripts, go/no-go checks, the rollback point and who does what |
 | [Comms templates](Comms-Templates.md) | T-7 to T+1 | Emails for staff and a short update for the business owner |
 | [Handover template](Handover-Template.md) | T+7 | What moved, where things are, admin accounts, DNS before and after, licences, open items, support window and decommission date |
+| [DNS move playbook](DNS-Move-Playbook.md) | T-14, if the DNS host is out of reach | Moving DNS hosting to the registrar (or anywhere) before cutover: full scan, replicate, verify, switch name servers, rollback |
+| [Lessons learnt](Lessons-Learnt.md) | Before you start | What went wrong, or nearly did, on a live cutover, and which script now handles each one |
 
 ## How to use them
 
@@ -39,4 +41,5 @@ Keep filled-in copies out of public repos. They'll hold names, dates and DNS det
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | DNS move playbook and lessons learnt added. Runbook and risk register updated after a live cutover |
 | 1.0.0 | 2026-11-09 | First release |

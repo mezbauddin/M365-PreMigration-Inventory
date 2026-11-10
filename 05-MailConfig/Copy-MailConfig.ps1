@@ -29,6 +29,11 @@
 .PARAMETER TenantId
     Optional tenant ID (GUID). The script stops if Exchange Online is signed in to any other tenant.
 
+.PARAMETER AdminUpn
+    Optional admin sign-in name, e.g. admin@contoso.com. If Exchange Online is already signed in as someone else, or
+    to another tenant, the script disconnects and signs in again as this account. Use it whenever you have both
+    tenants open on one PC.
+
 .PARAMETER OutputFolder
     With -Export: where to write. Defaults to .\MailConfig-<domain>-<date>.
 
@@ -59,11 +64,13 @@
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -ExportFolder .\MailConfig-fabrikam.com-20261109-1100 `
         -MappingFile .\UserMapping.csv -AddressDomain contoso.com -WhatIf
+.EXAMPLE
+    .\Copy-MailConfig.ps1 -Export -TenantId <source-guid> -AdminUpn admin@fabrikam.com
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.2
-    Date    : 2026-11-09
+    Version : 1.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x. Exchange Administrator. Objects this script creates are tagged with
@@ -78,6 +85,7 @@ param(
     [Parameter(ParameterSetName = 'Export', Mandatory)][switch]$Export,
     [Parameter(ParameterSetName = 'Import', Mandatory)][switch]$Import,
     [ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
+    [string]$AdminUpn,
 
     [Parameter(ParameterSetName = 'Export')][string]$OutputFolder,
 
@@ -93,13 +101,26 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ------------------------------------------------------------ connection and tenant guard
-if (-not (Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected')) {
-    Connect-ExchangeOnline -ShowBanner:$false
+# With -AdminUpn, an open session for another account or tenant is closed first, so Windows can't quietly reuse it.
+$conn = Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected' | Select-Object -First 1
+if ($conn -and $AdminUpn -and (("$($conn.UserPrincipalName)" -ne $AdminUpn) -or ($TenantId -and $conn.TenantID -ne $TenantId))) {
+    Write-Host "Exchange Online is signed in as $($conn.UserPrincipalName). Reconnecting as $AdminUpn." -ForegroundColor Yellow
+    Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    $conn = $null
+}
+if (-not $conn) {
+    $exoArgs = @{ ShowBanner = $false }
+    if ($AdminUpn) { $exoArgs.UserPrincipalName = $AdminUpn }
+    Connect-ExchangeOnline @exoArgs
 }
 $conn = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
 if ($TenantId -and $conn.TenantID -ne $TenantId) {
-    throw "Exchange Online is signed in to tenant $($conn.TenantID), not $TenantId. Run Disconnect-ExchangeOnline and sign in to the right tenant."
+    throw "Exchange Online is signed in to tenant $($conn.TenantID), not $TenantId. Run Disconnect-ExchangeOnline and sign in to the right tenant, or pass -AdminUpn."
 }
+if ($AdminUpn -and "$($conn.UserPrincipalName)" -ne $AdminUpn) {
+    throw "Exchange Online signed in as $($conn.UserPrincipalName), not $AdminUpn. Pick the right account in the sign-in box, or use a private browser window."
+}
+Write-Host "Signed in as $($conn.UserPrincipalName) to tenant $($conn.TenantID)" -ForegroundColor Cyan
 $accepted = @((Get-AcceptedDomain).DomainName | ForEach-Object { $_.ToLower() })
 $tenantName = (Get-AcceptedDomain | Where-Object Default).DomainName
 Write-Host "Connected to $tenantName" -ForegroundColor Cyan

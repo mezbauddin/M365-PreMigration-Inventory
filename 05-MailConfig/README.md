@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
-| Released | 9 November 2026 |
+| Version | 1.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part 5 of my [M365 tenant-to-tenant migration toolkit](../README.md). Run the export any time before cutover. Run the import once the destination mailboxes exist, built with [New-TargetMailboxes](../02-TargetMailboxes/).
@@ -62,7 +62,13 @@ Disconnect-ExchangeOnline -Confirm:$false
 
 # Only some parts
 .\Copy-MailConfig.ps1 -Import ... -Include Permissions, Forwarding
+
+# Name the account, so an open session for the other tenant is never reused
+.\Copy-MailConfig.ps1 -Export -TenantId <source-tenant-guid> -AdminUpn admin@fabrikam.onmicrosoft.com
+.\Copy-MailConfig.ps1 -Import -TenantId <destination-tenant-guid> -AdminUpn admin@contoso.onmicrosoft.com -ExportFolder ... -MappingFile ... -AddressDomain contoso.com
 ```
+
+**Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, signs in as the one you named, and prints `Signed in as X to tenant Y` before it changes anything. On the live cutover this would have saved a confusing error at the worst moment.
 
 ## Output
 
@@ -81,6 +87,31 @@ Rebuild these by hand, on purpose:
 
 `TransportRules.xml` holds a `New-TransportRule` command for each rule. Go through them one by one, fix the addresses, run each with `-Enabled $false`, test it, then turn it on.
 
+### After an acquisition, leaving them behind is often right
+
+When one company has bought another, the old company's mail flow rules are usually history, not configuration. On the live migration the source had years of them: a disclaimer for a brand that no longer traded, routing to a system that had been switched off, rules naming people who had left. The destination also served other companies, so a broad rule could have touched their mail too.
+
+What I'd do every time now:
+
+1. **Export them as reference only.** `TransportRules.csv` and `TransportRules.xml` are your record of what existed. Keep them with the handover.
+2. **Ask the business which ones still matter.** Usually it's one or two: a disclaimer, a block on a known bad sender, a copy to a compliance mailbox. Often it's none.
+3. **Rebuild only those, disabled.** Scope them to the moved users or domain, not the whole tenant. Test with a real message, then enable.
+4. **Write down what you left behind and why,** so nobody wonders in six months.
+
+**Trap:** a rule that "adds a disclaimer to all outbound mail" in the source becomes "adds the old company's disclaimer to every company's mail" in a shared destination.
+
+### Forwarding to outside addresses is the business owner's call
+
+The export lists every mailbox that forwards outside the organisation. Some are legitimate (an accountant, a partner firm). Some are a leaver's mail going to a personal address, which is a data protection problem waiting to happen. The script won't recreate them unless you pass `-IncludeExternalForwarding`, and I wouldn't pass it without a written yes from the business owner for each one. Outbound spam policy in the destination may block automatic forwarding anyway, so test any you do recreate.
+
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | Mailbox copy tools move the content. Some carry folder permissions with it; few rebuild Full Access, Send As, lists or forwarding in the destination. Check what yours does, then use this for the rest |
+| Microsoft's own | Native cross-tenant mailbox migration moves the mailbox with its own folder permissions, but not Full Access or Send As on other mailboxes, distribution lists or contacts. Exchange admin centre for each one by hand |
+| By hand | Exchange admin centre: for each shared mailbox, Delegation, add Full Access, Send As, Send on Behalf. For each list, recreate and add members. Fine for ten objects; error-prone for a hundred |
+
 ## Lessons learnt
 
 - **Map before you import.** Everything hinges on the mapping file. A permission is only rebuilt if both the mailbox and the person are in it. The import report lists every skip, so check it.
@@ -94,4 +125,5 @@ Rebuild these by hand, on purpose:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | `-AdminUpn`: disconnects a session for any other account or tenant, signs in as the one named, prints who and where. Guidance on leaving transport rules behind after an acquisition, and on external forwarding |
 | 1.0.0 | 2026-11-09 | First release |

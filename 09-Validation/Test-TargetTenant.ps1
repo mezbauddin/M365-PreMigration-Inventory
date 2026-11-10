@@ -22,13 +22,22 @@
       Items         Mailbox item count within -Tolerance percent of 04-Mailboxes.csv
       ArchiveItems  Archive item count, same rule
       OneDrive      With -SharePointAdminUrl: people (Kind User) have a OneDrive
+      Password      People (Kind User) must change their temporary password at next sign-in
     Plus:
       Mapping       Plan rows that aren't in the mapping file
       ListMembers   With -MailConfigFolder: member count of each distribution list against the 05 export
+      CA-Location   Conditional Access policies with a location condition. Your own test sign-in from abroad (or
+                    through a VPN) can be blocked with error 53003, which looks like a broken migration
+      MFA           No Conditional Access policy requires MFA for all users and security defaults are off. A
+                    finding to report, not something this script changes
 
 .PARAMETER TenantId
     Optional destination tenant ID (GUID). The script stops if Exchange Online or Graph is signed in to any other
     tenant.
+
+.PARAMETER AdminUpn
+    Optional admin sign-in name, e.g. admin@contoso.com. If Exchange Online or Graph is already signed in as someone
+    else, or to another tenant, the script disconnects and signs in again as this account.
 
 .PARAMETER InventoryFolder
     The Inventory-<tenant>-<date> folder from Invoke-SourceTenantInventory (part 1). 04-Mailboxes.csv is required.
@@ -57,6 +66,13 @@
 .PARAMETER SharePointAdminUrl
     Destination SharePoint admin URL, e.g. https://contoso-admin.sharepoint.com. Turns on the OneDrive check.
 
+.PARAMETER CutoverDate
+    Optional. When cutover happened. A moved user whose password was changed on or after this date passes the
+    Password check even though the change-at-next-sign-in flag is off (they've already signed in and changed it).
+
+.PARAMETER SkipTenantChecks
+    Leave out the tenant-wide Conditional Access and MFA checks.
+
 .EXAMPLE
     .\Test-TargetTenant.ps1 -TenantId <dest-guid> -InventoryFolder .\Inventory-fabrikam-20261110-0900 -MappingFile .\UserMapping.csv
 
@@ -65,14 +81,19 @@
         -Domain fabrikam.com -SourceSnapshot .\SourceRecipients-20261110-1800.csv -MailConfigFolder .\MailConfig-fabrikam.com-20261109-1100 `
         -SharePointAdminUrl https://contoso-admin.sharepoint.com
 
+.EXAMPLE
+    .\Test-TargetTenant.ps1 -TenantId <dest-guid> -AdminUpn admin@contoso.com -InventoryFolder .\Inventory-fabrikam-20261110-0900 `
+        -MappingFile .\UserMapping.csv -Domain fabrikam.com -CutoverDate 2026-11-10
+
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.0
-    Date    : 2026-11-09
+    Version : 1.1.0
+    Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
     Requires: ExchangeOnlineManagement 3.x, Microsoft.Graph.Authentication, Microsoft.Graph.Users,
-              Microsoft.Graph.Identity.DirectoryManagement. Global Reader is enough. For -SharePointAdminUrl:
+              Microsoft.Graph.Identity.DirectoryManagement. Global Reader is enough (Graph scopes User.Read.All,
+              Organization.Read.All, Policy.Read.All). For -SharePointAdminUrl:
               Microsoft.Online.SharePoint.PowerShell and SharePoint Administrator.
     Item counts are a guide, not proof. Copy tools can skip some item types, and new mail arrives after cutover.
     Read every Warn and Fail, and decide.
@@ -80,6 +101,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
+    [string]$AdminUpn,
     [Parameter(Mandatory)][string]$InventoryFolder,
     [Parameter(Mandatory)][string]$MappingFile,
     [string]$PlanFile = '.\TargetBuildPlan.csv',
@@ -87,7 +109,9 @@ param(
     [string]$SourceSnapshot,
     [ValidateRange(0, 100)][double]$Tolerance = 5,
     [string]$MailConfigFolder,
-    [string]$SharePointAdminUrl
+    [string]$SharePointAdminUrl,
+    [datetime]$CutoverDate,
+    [switch]$SkipTenantChecks
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,11 +152,28 @@ foreach ($r in Import-Csv $MappingFile) {
 }
 
 # ------------------------------------------------------------ connect and guard
-if (-not (Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected')) { Connect-ExchangeOnline -ShowBanner:$false }
-$exoTenant = (Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1).TenantID
-if ($TenantId -and $exoTenant -ne $TenantId) { throw "Exchange Online is signed in to $exoTenant, not $TenantId. Disconnect-ExchangeOnline and sign in to the destination." }
-Connect-MgGraph -TenantId $exoTenant -NoWelcome -Scopes 'User.Read.All', 'Organization.Read.All'
+# With -AdminUpn, an open session for another account or tenant is closed first, so Windows can't quietly reuse it.
+$conn = Get-ConnectionInformation -ErrorAction SilentlyContinue | Where-Object State -eq 'Connected' | Select-Object -First 1
+if ($conn -and $AdminUpn -and (("$($conn.UserPrincipalName)" -ne $AdminUpn) -or ($TenantId -and $conn.TenantID -ne $TenantId))) {
+    Write-Host "Exchange Online is signed in as $($conn.UserPrincipalName). Reconnecting as $AdminUpn." -ForegroundColor Yellow
+    Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    $conn = $null
+}
+if (-not $conn) {
+    $exoArgs = @{ ShowBanner = $false }
+    if ($AdminUpn) { $exoArgs.UserPrincipalName = $AdminUpn }
+    Connect-ExchangeOnline @exoArgs
+}
+$conn = Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -First 1
+$exoTenant = $conn.TenantID
+if ($TenantId -and $exoTenant -ne $TenantId) { throw "Exchange Online is signed in to $exoTenant, not $TenantId. Disconnect-ExchangeOnline and sign in to the destination, or pass -AdminUpn." }
+if ($AdminUpn -and "$($conn.UserPrincipalName)" -ne $AdminUpn) { throw "Exchange Online signed in as $($conn.UserPrincipalName), not $AdminUpn." }
+$mg = Get-MgContext
+if ($mg -and (($mg.TenantId -ne $exoTenant) -or ($AdminUpn -and $mg.Account -ne $AdminUpn))) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
+Connect-MgGraph -TenantId $exoTenant -NoWelcome -Scopes 'User.Read.All', 'Organization.Read.All', 'Policy.Read.All'
 if ((Get-MgContext).TenantId -ne $exoTenant) { throw "Graph signed in to $((Get-MgContext).TenantId), not $exoTenant." }
+if ($AdminUpn -and (Get-MgContext).Account -ne $AdminUpn) { throw "Graph signed in as $((Get-MgContext).Account), not $AdminUpn. Run Disconnect-MgGraph and pick the right account." }
+Write-Host "Signed in as $($conn.UserPrincipalName) to tenant $exoTenant" -ForegroundColor Cyan
 $tenantName = (Get-AcceptedDomain | Where-Object Default).DomainName
 Write-Host "Checking $tenantName against $($mapping.Count) mapped recipients. Read-only." -ForegroundColor Cyan
 
@@ -263,8 +304,57 @@ foreach ($w in $mapping) {
         if ($hit) { Add-Result $src 'OneDrive' 'Pass' 'exists' $hit.Url '' }
         else { Add-Result $src 'OneDrive' 'Fail' 'exists' 'none' 'No OneDrive for this sign-in name. Run part 4' }
     }
+
+    # ---------------------------------------------------- temporary password must be changed
+    if ($p -and $p.Kind -eq 'User' -and $type -eq 'UserMailbox' -and $dest.ExternalDirectoryObjectId) {
+        $pw = Get-MgUser -UserId $dest.ExternalDirectoryObjectId -Property Id, PasswordProfile, LastPasswordChangeDateTime -ErrorAction SilentlyContinue
+        $force = $pw.PasswordProfile.ForceChangePasswordNextSignIn   # Graph returns empty, not False, when the flag is off
+        $changed = $pw.LastPasswordChangeDateTime
+        if ($null -eq $pw) { Add-Result $src 'Password' 'Warn' 'change at next sign-in' 'not read' 'Could not read the user from Graph' }
+        elseif ($force -eq $true) { Add-Result $src 'Password' 'Pass' 'change at next sign-in' 'True' '' }
+        elseif ($CutoverDate -and $changed -and ([datetime]$changed) -ge $CutoverDate) {
+            Add-Result $src 'Password' 'Pass' 'change at next sign-in' 'False' "Informational: password already changed on $(([datetime]$changed).ToString('yyyy-MM-dd HH:mm')), after cutover"
+        }
+        else {
+            $when = if ($changed) { ([datetime]$changed).ToString('yyyy-MM-dd HH:mm') } else { 'unknown' }
+            Add-Result $src 'Password' 'Warn' 'change at next sign-in' 'False or empty' "Last password change $when. If that's the person changing it after cutover, fine (pass -CutoverDate). Otherwise the temporary password you handed out stays valid: reset it with part 7 Switch-TargetAddresses -ResetPasswords"
+        }
+    }
 }
 Write-Progress -Activity 'Validating' -Completed
+
+# ------------------------------------------------------------ tenant-wide: Conditional Access and MFA
+if (-not $SkipTenantChecks) {
+    try {
+        $policies = [System.Collections.Generic.List[object]]::new()
+        $uri = 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies'
+        do {
+            $page = Invoke-MgGraphRequest GET $uri
+            foreach ($cap in $page.value) { $policies.Add($cap) }
+            $uri = $page.'@odata.nextLink'
+        } while ($uri)
+        $live = @($policies | Where-Object { $_.state -in 'enabled', 'enabledForReportingButNotEnforced' })
+
+        foreach ($cap in $live) {
+            $loc = $cap.conditions.locations
+            if ($loc -and (@($loc.includeLocations).Count -or @($loc.excludeLocations).Count)) {
+                $mode = if ($cap.state -eq 'enabled') { 'enforced' } else { 'report-only' }
+                Add-Result "CA: $($cap.displayName)" 'CA-Location' 'Warn' 'awareness' "location condition, $mode" 'Test sign-ins from outside the allowed locations (travelling, VPN, cloud PC) fail with error 53003. Test from where the users really are, or add your test account to the policy exclusions for the night and remove it after'
+            }
+        }
+
+        $mfaAll = @($live | Where-Object {
+                $_.state -eq 'enabled' -and @($_.conditions.users.includeUsers) -contains 'All' -and
+                ((@($_.grantControls.builtInControls) -contains 'mfa') -or $_.grantControls.authenticationStrength)
+            })
+        $secDefaults = $false
+        try { $secDefaults = [bool](Invoke-MgGraphRequest GET 'https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy').isEnabled } catch {}
+        if ($mfaAll) { Add-Result 'Tenant' 'MFA' 'Pass' 'MFA for all users' (($mfaAll | ForEach-Object { $_.displayName }) -join '; ') '' }
+        elseif ($secDefaults) { Add-Result 'Tenant' 'MFA' 'Pass' 'MFA for all users' 'Security defaults on' '' }
+        else { Add-Result 'Tenant' 'MFA' 'Warn' 'MFA for all users' 'no policy' 'Finding only: no enabled Conditional Access policy requires MFA for all users, and security defaults are off. Raise it with the business owner. This script changes nothing' }
+    }
+    catch { Add-Result 'Tenant' 'CA-Location' 'Warn' 'policies read' 'not read' "Couldn't read Conditional Access ($($_.Exception.Message)). Needs Policy.Read.All, and Entra ID P1 for Conditional Access" }
+}
 
 # ------------------------------------------------------------ plan rows nobody mapped
 foreach ($k in $plan.Keys) {
@@ -291,7 +381,7 @@ if ($MailConfigFolder) {
 
 # ------------------------------------------------------------ report
 $file = ".\Validation-$tenantName-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-$results | Export-Csv $file -NoTypeInformation
+$results | Export-Csv $file -NoTypeInformation -WhatIf:$false
 Write-Host ''
 $results | Group-Object Check | Sort-Object Name | ForEach-Object {
     $g = $_.Group

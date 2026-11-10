@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Released | 9 November 2026 |
 | Licence | MIT |
 
@@ -67,7 +67,12 @@ Disconnect-ExchangeOnline -Confirm:$false
 
 # One team at a time
 .\Copy-CollaborationMap.ps1 -Import ... -Group sales@fabrikam.com
+
+# Name the account (Exchange Online, and Graph with -EnableTeams)
+.\Copy-CollaborationMap.ps1 -Import -TenantId <destination-tenant-guid> -AdminUpn admin@contoso.onmicrosoft.com -ExportFolder ... -MappingFile ... -AddressDomain contoso.com
 ```
+
+**Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, signs in to Exchange Online (and Graph, with `-EnableTeams`) as the one you named, and prints `Signed in as X to tenant Y` before it changes anything. On the live cutover this would have saved a confusing error at the worst moment. The signed-in account becomes the first owner of every new group, which is one more reason to make sure it's the right one.
 
 Then, in your copy tool, copy each Team's channels and each site's libraries into the groups that now exist, rather than letting it create new ones.
 
@@ -88,8 +93,17 @@ The CSVs contain names and addresses. Keep them out of source control and shared
 - **Teams can take a moment.** Graph sometimes can't see a brand-new group straight away. The script retries a few times. If it still fails, the group is fine; re-run later and it'll only do the Teams part.
 - **Welcome messages are off for a reason.** Otherwise every member gets a 'you've been added to' email from a tenant they haven't started using yet, weeks before cutover.
 
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | ShareGate can create the Team for you while copying, but the address and site URL are its choice, and a name clash gives you a "2" on the end. Create the groups with this script, then use "copy channels into an existing team" |
+| Microsoft's own | Teams admin centre or `New-UnifiedGroup` and `New-Team` by hand, then add owners and members. Native cross-tenant migration doesn't move shared Teams content at all |
+| By hand | Create each Team in the Teams client with the right name, then add members. Fine for four Teams. Check the email address it was given before you copy anything into it |
+
 ## Changelog
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1.0 | 2026-11-10 | `-AdminUpn`: disconnects Exchange Online and Graph sessions for any other account or tenant, signs in as the one named, prints who and where |
 | 1.0.0 | 2026-11-09 | First release |

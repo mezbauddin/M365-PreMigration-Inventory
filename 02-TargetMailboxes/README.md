@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | Author | Mezba Uddin, Microsoft MVP |
-| Version | 2.0.1 |
-| Released | 7 November 2026 |
+| Version | 2.1.0 |
+| Released | 10 November 2026 |
 | Licence | MIT |
 
 Part 2 of my [M365 tenant-to-tenant migration toolkit](../README.md). Part 1 is [Invoke-SourceTenantInventory](../01-SourceInventory/), which produces the `04-Mailboxes.csv` this script reads.
@@ -57,6 +57,12 @@ Install-Module ExchangeOnlineManagement, Microsoft.Graph.Authentication, Microso
 .\New-TargetMailboxes.ps1 -Apply -TargetDomain contoso.onmicrosoft.com -UsageLocation GB
 ```
 
+**Tip: name the account.** With both tenants open on one PC, `Connect-ExchangeOnline` and `Connect-MgGraph` happily reuse whichever session is already there. Add `-AdminUpn admin@contoso.onmicrosoft.com` and the script disconnects any session for another account or tenant, signs in as the one you named, and prints `Signed in as X to tenant Y` before it changes anything. On the live cutover this would have saved a confusing error at the worst moment.
+
+```powershell
+.\New-TargetMailboxes.ps1 -Apply -TargetDomain contoso.onmicrosoft.com -UsageLocation GB -StageOnly -AdminUpn admin@contoso.onmicrosoft.com
+```
+
 Add `-StagingSmtpDomain contoso.com` to any `-Apply` to give staged mailboxes a primary address on a domain the destination already owns. The onmicrosoft.com address stays as a proxy, so your migration tool's mapping keeps working.
 
 ## What the plan decides
@@ -94,6 +100,16 @@ Open the CSV before you apply it. Two things to look for:
 - **Archive copies often need EWS, and the EWS allow list changed in October 2026.** Main mail can copy fine while every archive fails with 'Unauthorized'. [Test-EwsArchiveReadiness](../03-EwsArchiveReadiness/) checks and fixes the causes in both tenants.
 - **Some tools copy only email into a shared mailbox.** The one I used skipped calendars and contacts until the mailbox was a user mailbox. Check yours, and run an incremental after step 4 if needed.
 
+## Three ways to do it
+
+| Route | How |
+| --- | --- |
+| Paid tool | ShareGate and most copy tools copy into mailboxes; they don't create them. Some suites have a provisioning step: check whether it builds shared mailboxes or licensed users, and on which domain the sign-in name lands |
+| Microsoft's own | Native cross-tenant mailbox migration needs **mail users**, not mailboxes, stamped with the source's ExchangeGuid and X500. Don't use this script for that route; see [option A](../copy-options/A-Microsoft-native/) |
+| By hand | Exchange admin centre, Recipients, Mailboxes, Add a shared mailbox, one per person, then convert and license at cutover. Fine for five people. Remember to set the sign-in name, or it lands on the tenant's default domain |
+
+- **Trap:** a module version clash ("Could not load file or assembly Microsoft.Graph.Authentication") stops `-Apply` part way. Run [tools/Test-ModuleHealth.ps1](../tools/) first, and start in a fresh window.
+
 ## Notes
 
 - `-Apply` checks that the signed-in tenant owns `-TargetDomain` before it changes anything. Run it against the wrong tenant and it stops.
@@ -104,6 +120,7 @@ Open the CSV before you apply it. Two things to look for:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 2.1.0 | 2026-11-10 | `-AdminUpn`: disconnects a session for any other account, signs in as the one named, prints who and where before changing anything |
 | 2.0.1 | 2026-11-08 | Shared mailboxes get their sign-in name set to `TargetAddress`. Without it Exchange uses the tenant's default domain. Warns when a sign-in name differs, and the passwords file shows the real one |
 | 2.0.0 | 2026-11-07 | First public release. Generic parameters replace tenant-specific settings. Adds `-StagingSmtpDomain`, `-ResetPasswords`, `-TreatAsShared` and `-Exclude` |
 | 1.2.2 | 2026-11-07 | Password permission added. Usage location and licence no longer depend on the password step. Resumes people converted by an interrupted run. Warnings show Graph's real error text |

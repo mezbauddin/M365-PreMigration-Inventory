@@ -7,6 +7,7 @@
 | Author | Mezba Uddin, Microsoft MVP |
 | Tested | Production: about 40 mailboxes, 1.7 TB of mail (most of it archives), one 140 GB SharePoint site, four Teams, 50 GB of OneDrive |
 | Tool version | ShareGate Migrate 26.11 |
+| Script | `Copy-DrivesWithShareGate.ps1` 1.1.0 |
 
 Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
 
@@ -118,6 +119,21 @@ https://fabrikam-my.sharepoint.com/personal/kim_fabrikam_com,https://contoso.sha
 ```
 
 Destination folders must exist first. You need site collection admin on every source OneDrive, and the destination OneDrives must exist ([04](../../04-TargetOneDrives/)).
+
+**Don't write the CSV by hand.** [`New-DriveCopyList.ps1`](../New-DriveCopyList.ps1) in the copy-options folder builds it: leavers (unlicensed, blocked or deleted owners) into one folder each, current staff into their new OneDrive through your mapping, archived OneDrives marked Skip. With `-CreateFolders` it makes the folders too. Version 1.1.0 of `Copy-DrivesWithShareGate.ps1` leaves out rows marked Skip.
+
+```powershell
+# PowerShell 7: build the list and the folders
+..\New-DriveCopyList.ps1 -SourceAdminUrl https://fabrikam-admin.sharepoint.com -Leavers `
+    -DestinationSite https://contoso.sharepoint.com/sites/Archive -DestinationLibrary 'Former Staff OneDrive' -CreateFolders
+# Windows PowerShell 5.1: copy
+.\Copy-DrivesWithShareGate.ps1 -CsvPath .\DriveCopyList-<date>.csv -SourceAdminUrl https://fabrikam-admin.sharepoint.com `
+    -DestinationAdminUrl https://contoso-admin.sharepoint.com -MappingFile .\UserMapping.sgum
+```
+
+**Trap:** sign-in names change at cutover. Rebuild the mapping ([02b](../../02b-UserMapping/)) and the `.sgum` afterwards, then rebuild this list, before any OneDrive copy or incremental. An incremental with the old `.sgum` maps nobody.
+
+**Trap:** ShareGate's module only loads in Windows PowerShell 5.1. If you've just run Graph or Exchange scripts in 7, open a separate 5.1 window rather than calling it from the same session. [`tools/Test-ModuleHealth.ps1`](../../tools/) tells you which window can load what.
 
 ## 5. Cutover and after
 

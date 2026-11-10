@@ -38,7 +38,7 @@ Build the destination ([02](../../02-TargetMailboxes/)), rebuild permissions, li
 
 | Script | Status | Purpose |
 | --- | --- | --- |
-| [`Copy-DriveViaGraph.ps1`](Copy-DriveViaGraph.ps1) | 1.0.0 | OneDrive or library copy between tenants with only Microsoft Graph. `-Download` from the source to a local folder, then `-Upload` into the destination, keeping folders and file dates. Skips what's already done, so re-runs are safe. Large files go up in 10 MB chunks |
+| [`Copy-DriveViaGraph.ps1`](Copy-DriveViaGraph.ps1) | 1.1.0 | OneDrive or library copy between tenants with only Microsoft Graph. `-Download` from the source to a local folder, then `-Upload` into the destination, keeping folders and file dates. Skips what's already done, so re-runs are safe. Large files go up in 10 MB chunks. 1.1.0 adds `-CsvPath` for the list from [`New-DriveCopyList.ps1`](../New-DriveCopyList.ps1): each row to its own destination, Skip rows left out |
 | `New-PstImportMapping.ps1` | Planned | Builds the PST import mapping CSV from the toolkit's user mapping |
 
 ```powershell
@@ -50,5 +50,13 @@ Build the destination ([02](../../02-TargetMailboxes/)), rebuild permissions, li
 .\Copy-DriveViaGraph.ps1 -Upload -TenantId <dest-guid> -LocalPath C:\T2T `
     -DestinationSiteUrl https://contoso.sharepoint.com/sites/Archive -DestinationLibrary 'Former Staff OneDrive'
 ```
+
+```powershell
+# Or from the copy list (see ../New-DriveCopyList.ps1): leavers into one folder each, staff into their new OneDrive
+.\Copy-DriveViaGraph.ps1 -Download -TenantId <source-guid> -LocalPath C:\T2T -CsvPath ..\DriveCopyList-<date>.csv
+.\Copy-DriveViaGraph.ps1 -Upload -TenantId <dest-guid> -LocalPath C:\T2T -CsvPath ..\DriveCopyList-<date>.csv
+```
+
+**Tip:** with `-CsvPath`, a row with a DestinationFolder downloads into `C:\T2T\<folder>` and uploads into that folder of the library. A row without one (OneDrive to OneDrive) uses the URL's last segment locally and uploads into the root of the person's new OneDrive.
 
 It's a good fit for leavers' OneDrives: small, nobody working in them, no need for version history. Archived OneDrives (unlicensed for months) can't be read until they're reactivated.
