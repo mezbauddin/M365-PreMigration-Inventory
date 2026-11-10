@@ -59,7 +59,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.2
+    Version : 1.0.3
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -69,6 +69,7 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.3  2026-11-10  Guided build searches for the new .ppkg instead of assuming one folder; device name left blank.
       1.0.2  2026-11-10  Option 1 finds Windows Configuration Designer from the Microsoft Store as well as the ADK,
                          installs it with winget when missing, checks for it before asking you to sign in, and falls
                          back to a guided build when the Store version won't build from the command line.
@@ -294,18 +295,26 @@ function Invoke-BuildPackage {
     Write-Host @"
 1. Click "Provision desktop devices".
 2. Name: $name. Next.
-3. Set up device: type any name pattern (e.g. HST-%RAND:4%) or leave blank. Turn off "Remove pre-installed software". Next.
+3. Set up device: leave the device name BLANK (a pattern renames every laptop and adds a restart). Turn off "Remove pre-installed software". Next.
 4. Set up network: turn it OFF. Next.
 5. Account management: choose "Enroll in Azure AD". Bulk Token Expiry: $expiry days from today. Click "Get Bulk Token" and sign in as $DestinationAdmin.
    If it asks "Allow my organization to manage my device", untick it and choose "This app only".
 6. Add applications / certificates: skip. Finish: click Create. It shows the folder it saved to.
 "@ -ForegroundColor Yellow
     if ($wcd.Source -eq 'Store') { Start-Process 'explorer.exe' $wcd.Launch -ErrorAction SilentlyContinue } else { Start-Process $wcd.Launch -ErrorAction SilentlyContinue }
-    $default = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "Windows Imaging and Configuration Designer (WICD)\$name\$name.ppkg"
-    $p = Read-Host "When it says the package is built, press Enter (or paste the .ppkg path if it isn't $default)"
-    if (-not $p) { $p = $default }
-    if (Test-Path $p) { Copy-Item $p $ppkg -Force -WhatIf:$false; Write-Ok "Package ready: $ppkg"; Add-State 'Package' $ppkg }
-    else { Write-Warn2 "No package at $p. Find the .ppkg in the folder Windows Configuration Designer showed and pass it to option 4 with -PackagePath." }
+    $started = Get-Date
+    $p = Read-Host 'Wait for "Your provisioning package has been successfully built", then press Enter (or paste the .ppkg path)'
+    if (-not $p) {
+        # WCD's save folder varies by version and by OneDrive folder redirection, so search instead of guessing
+        $roots = @([Environment]::GetFolderPath('MyDocuments'), $env:USERPROFILE, (Join-Path $env:LOCALAPPDATA 'Packages')) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+        $hit = foreach ($r in $roots) { Get-ChildItem $r -Recurse -Filter '*.ppkg' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $started.AddHours(-2) } }
+        $hit = @($hit | Sort-Object LastWriteTime -Descending | Select-Object -Unique)
+        $exact = @($hit | Where-Object { $_.BaseName -eq $name })
+        $p = if ($exact) { $exact[0].FullName } elseif ($hit.Count -eq 1) { $hit[0].FullName } elseif ($hit) { $hit | Select-Object FullName, LastWriteTime | Format-Table -AutoSize | Out-String -Width 250 | Write-Host; Read-Host 'Several packages found. Paste the one to use' } else { '' }
+        if ($p) { Write-Host "Found: $p" -ForegroundColor Cyan }
+    }
+    if ($p -and (Test-Path $p)) { Copy-Item $p $ppkg -Force -WhatIf:$false; Write-Ok "Package ready: $ppkg"; Add-State 'Package' $ppkg }
+    else { Write-Warn2 "No new .ppkg found yet. Finish the wizard (Create), then run option 1 again or pass the .ppkg to option 4 with -PackagePath." }
 }
 
 # ---------------------------------------------------------------- 2. Intune configuration (admin PC)

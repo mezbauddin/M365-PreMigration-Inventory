@@ -206,6 +206,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.3 | 2026-11-10 | Move-TenantDevices 1.0.3: guided build finds the new .ppkg itself |
 | 1.2.2 | 2026-11-10 | Move-TenantDevices 1.0.2: option 1 finds or installs Windows Configuration Designer (Store or ADK) |
 | 1.2.1 | 2026-11-10 | `Move-TenantDevices.ps1` 1.0.1: option 4 safety guard (`-SourceTenantId`, typed tenant name, local admin must exist and be enabled). "Where to run what" table |
 | 1.2.0 | 2026-11-10 | Added `Move-TenantDevices.ps1`: one menu for package, Intune copy, Autopilot, staged device move and profile handover |
