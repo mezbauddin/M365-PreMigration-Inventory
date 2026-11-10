@@ -93,6 +93,7 @@ Option 4 has a guard for exactly that mistake. Pass `-SourceTenantId` and stage 
 
 - **Tip:** do one willing person first, end to end, before the rest.
 - **Tip:** option 2 finds nothing in a tenant that never used Intune. That's fine; the laptops still enrol in the destination's Intune automatically on join (MDM enrolment scope).
+- **Trap:** an ordinary sign-in token is not a bulk token. A package built from one won't join anything; the bulk token comes from the `bulkaadjtoken` endpoint, the same one Windows Configuration Designer's "Get Bulk Token" button calls. Option 1 uses it.
 - **Trap:** the bulk token request in option 1 uses the same undocumented sign-in flow as Windows Configuration Designer. If Microsoft changes it, the script opens WCD and tells you what to click. Either way you end up with a `.ppkg`.
 - **Trap:** the `.ppkg` joins any device to the tenant. Keep it off shared drives and delete it when the move is done.
 - **Trap:** run stages 2 and 5 from the local admin, never from the person's account. A loaded profile can't be handed over.
@@ -206,6 +207,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.4 | 2026-11-10 | Move-TenantDevices 1.0.4: option 1 builds the package with no clicks (real bulk token, silent ICD build) |
 | 1.2.3 | 2026-11-10 | Move-TenantDevices 1.0.3: guided build finds the new .ppkg itself |
 | 1.2.2 | 2026-11-10 | Move-TenantDevices 1.0.2: option 1 finds or installs Windows Configuration Designer (Store or ADK) |
 | 1.2.1 | 2026-11-10 | `Move-TenantDevices.ps1` 1.0.1: option 4 safety guard (`-SourceTenantId`, typed tenant name, local admin must exist and be enabled). "Where to run what" table |

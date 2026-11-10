@@ -59,7 +59,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.3
+    Version : 1.0.4
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -69,6 +69,10 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.4  2026-11-10  Option 1 builds the package with no clicks: real bulk token via bulkaadjtoken (the token
+                         1.0.0-1.0.3 requested was an ordinary refresh token and would not have joined devices),
+                         optional rename pattern, ICD run inside the Store app's package context, or the ADK
+                         Configuration Designer installed silently with winget. Guided WCD stays as the last resort.
       1.0.3  2026-11-10  Guided build searches for the new .ppkg instead of assuming one folder; device name left blank.
       1.0.2  2026-11-10  Option 1 finds Windows Configuration Designer from the Microsoft Store as well as the ADK,
                          installs it with winget when missing, checks for it before asking you to sign in, and falls
@@ -208,6 +212,57 @@ function Install-Wcd {
     $w
 }
 
+function Get-BulkToken([string]$TenantId, [string]$Admin, [int]$Days, [string]$PackageName) {
+    # Same two calls Windows Configuration Designer makes behind "Get Bulk Token":
+    #  1. sign in (device code) for the device registration service
+    #  2. ask login.microsoftonline.com/webapp/bulkaadjtoken for a bulk token, which creates the package_<guid> account
+    $client = 'b90d5b8f-5503-4153-b545-b31cecfaece2'   # Windows Configuration Designer
+    $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
+    $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/devicecode" -Body @{ client_id = $client; resource = $drs }
+    Write-Host $dc.message -ForegroundColor Yellow
+    Write-Host "Sign in as $Admin. If asked whether to let your organisation manage this device, choose 'This app only'." -ForegroundColor Yellow
+    $at = $null; $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
+    while (-not $at -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds ([int]$dc.interval)
+        try { $at = (Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $client; code = $dc.device_code; resource = $drs }).access_token }
+        catch { $b = ''; try { $b = $_.ErrorDetails.Message } catch {}; if ($b -notmatch 'authorization_pending') { throw } }
+    }
+    if (-not $at) { throw 'Sign-in timed out.' }
+    $h = @{ Authorization = "Bearer $at" }
+    $pid0 = [guid]::NewGuid().ToString()
+    $body = @{ pid = $pid0; name = "package_$pid0"; exp = (Get-Date).AddDays($Days).ToString('MM/dd/yyyy') } | ConvertTo-Json
+    $r = Invoke-RestMethod -Method Post 'https://login.microsoftonline.com/webapp/bulkaadjtoken/begin' -Headers $h -Body $body -ContentType 'application/json'
+    $until = (Get-Date).AddMinutes(3)
+    while ($r.state -notmatch 'Complete|Fail|Error' -and (Get-Date) -lt $until) {
+        Start-Sleep -Seconds 3
+        $r = Invoke-RestMethod -Method Get "https://login.microsoftonline.com/webapp/bulkaadjtoken/poll?flowToken=$($r.flowToken)" -Headers $h
+    }
+    if ($r.state -ne 'CompleteSuccess') { throw "Bulk token request ended with state '$($r.state)' $($r.resultData)" }
+    $data = $r.resultData; if ($data -is [string]) { try { $data = $data | ConvertFrom-Json } catch {} }
+    foreach ($k in 'rt', 'BPRT', 'bprt', 'refresh_token', 'token') { if ($data -and $data.PSObject.Properties[$k] -and $data.$k) { return $data.$k } }
+    if ($r.resultData -is [string] -and $r.resultData.Length -gt 200) { return $r.resultData }
+    throw 'Bulk token request succeeded but no token was found in the response.'
+}
+function Invoke-Icd($Wcd, [string[]]$IcdArgs, [string]$Log) {
+    # ADK version: run ICD.exe directly. Store version: run it inside its own package context.
+    if ($Wcd.Source -eq 'ADK') { & $Wcd.Exe @IcdArgs 2>&1 | Out-String | Add-Content $Log; return }
+    $pkg = Get-AppxPackage -Name '*WindowsConfigurationDesigner*' | Sort-Object Version -Descending | Select-Object -First 1
+    $appId = try { @((Get-AppxPackageManifest $pkg).Package.Applications.Application)[0].Id } catch { 'App' }
+    Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId $appId -Command $Wcd.Exe -Args ($IcdArgs -join ' ') -PreventBreakaway
+    # Invoke-CommandInDesktopPackage doesn't wait: poll for the package for up to 3 minutes
+    $out = ($IcdArgs | Where-Object { $_ -like '/PackagePath:*' }) -replace '^/PackagePath:"?|"$', ''
+    $until = (Get-Date).AddMinutes(3)
+    while (-not (Test-Path $out) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 5 }
+}
+function Install-AdkIcd {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
+    Write-Host 'Installing the Windows ADK "Configuration Designer" feature only (silent, a few minutes)...' -ForegroundColor Cyan
+    winget install --id Microsoft.WindowsADK --accept-package-agreements --accept-source-agreements --silent --override '/features OptionId.ICDConfigurationDesigner /quiet /norestart /ceip off' | Out-Host
+    $w = Find-Wcd
+    if ($w -and $w.Source -eq 'ADK') { Write-Ok 'Configuration Designer (ADK) installed'; return $w }
+    $null
+}
+
 function Invoke-BuildPackage {
     Write-Step 'Build the enrolment package (run on your admin PC)'
     $wcd = Find-Wcd
@@ -218,70 +273,51 @@ function Invoke-BuildPackage {
     $name = Read-Host 'Package name (letters, digits and hyphens, e.g. contoso-join)'
     if (-not $name) { $name = 'tenant-join' }
     $name = $name -replace '[^A-Za-z0-9-]', ''
-    $expiry = Read-Host 'Token validity in days (max 180, default 180; used by the guided fallback)'
+    $expiry = Read-Host 'Token validity in days (max 180, default 180)'
     if (-not $expiry) { $expiry = 180 }
+    $expiry = [Math]::Min(180, [int]$expiry)
+    $rename = Read-Host 'Rename laptops on join? Pattern like TG-%SERIAL% (max 15 characters in total), or Enter to keep names'
     $ppkg = Join-Path $WorkFolder "$name.ppkg"
+    $log = Join-Path $WorkFolder "ICD-build-$script:Stamp.log"
 
     $built = $false
-    if ($wcd.Exe) {
-        # The bulk token is a refresh token issued to the Windows Configuration Designer app for the device registration
-        # service. WCD requests it with the same OAuth device-code flow; the account "package_<guid>" that appears in the
-        # destination afterwards is created by the service, not by us.
-        $wcdApp = 'b90d5b8f-5503-4153-b545-b31cecfaece2'
-        $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
-        $bprt = $null
-        Write-Host 'Requesting the bulk enrolment token (same flow as Windows Configuration Designer)...' -ForegroundColor Cyan
-        try {
-            $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/devicecode" -Body @{ client_id = $wcdApp; resource = $drs }
-            Write-Host $dc.message -ForegroundColor Yellow
-            Write-Host "Sign in as $DestinationAdmin. Waiting..." -ForegroundColor Yellow
-            $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
-            while ((Get-Date) -lt $deadline) {
-                Start-Sleep -Seconds ([int]$dc.interval)
-                try {
-                    $tok = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$DestinationTenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $wcdApp; code = $dc.device_code; resource = $drs }
-                    if ($tok.refresh_token) { $bprt = $tok.refresh_token; break }
-                }
-                catch {
-                    $body = ''; try { $body = $_.ErrorDetails.Message } catch {}
-                    if ($body -match 'authorization_pending') { continue }
-                    throw
-                }
-            }
-        }
-        catch { Write-Warn2 "Scripted token request failed: $($_.Exception.Message)" }
+    $bprt = $null
+    try { $bprt = Get-BulkToken $DestinationTenantId $DestinationAdmin $expiry $name; Write-Ok "Bulk token received (valid $expiry days)" }
+    catch { Write-Warn2 "Bulk token request failed: $($_.Exception.Message)" }
 
-        if ($bprt) {
-            Write-Ok 'Token received. Building the package with ICD.exe.'
-            $id = [guid]::NewGuid().ToString()
-            $xml = @"
+    if ($bprt) {
+        $id = [guid]::NewGuid().ToString()
+        $renameXml = if ($rename) { "<DevDetail><DNSComputerName>$rename</DNSComputerName></DevDetail>" } else { '' }
+        $xml = @"
 <?xml version="1.0" encoding="utf-8"?>
 <WindowsCustomizations>
   <PackageConfig xmlns="urn:schemas-Microsoft-com:Windows-ICD-Package-Config.v1.0">
     <ID>{$id}</ID><Name>$name</Name><Version>1.0</Version><OwnerType>OEM</OwnerType><Rank>0</Rank>
   </PackageConfig>
   <Settings xmlns="urn:schemas-microsoft-com:windows-provisioning">
-    <Customizations><Common><Accounts><Azure>
-      <Authority>https://login.microsoftonline.com/common</Authority>
-      <BPRT>$bprt</BPRT>
-    </Azure></Accounts></Common></Customizations>
+    <Customizations><Common>
+      <Accounts><Azure><Authority>https://login.microsoftonline.com/common</Authority><BPRT>$bprt</BPRT></Azure></Accounts>
+      $renameXml
+    </Common></Customizations>
   </Settings>
 </WindowsCustomizations>
 "@
-            $xmlPath = Join-Path $WorkFolder "$name.customizations.xml"
-            $xml | Set-Content $xmlPath -Encoding UTF8 -WhatIf:$false
-            $bprt = $null
-            $storeFile = Get-ChildItem $wcd.Root -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $xmlPath = Join-Path $WorkFolder "$name.customizations.xml"
+        $xml | Set-Content $xmlPath -Encoding UTF8 -WhatIf:$false
+        $bprt = $null
+        $attempts = @($wcd)
+        foreach ($w in $attempts + @('ADK')) {
+            if ($w -eq 'ADK') { if ($wcd.Source -eq 'ADK') { break }; $w = Install-AdkIcd; if (-not $w) { break } }
+            if (-not $w.Exe) { continue }
+            $storeFile = Get-ChildItem $w.Root -Recurse -Filter 'Microsoft-Desktop-Provisioning.dat' -ErrorAction SilentlyContinue | Select-Object -First 1
             $icdArgs = @('/Build-ProvisioningPackage', "/CustomizationXML:`"$xmlPath`"", "/PackagePath:`"$ppkg`"", '+Overwrite')
             if ($storeFile) { $icdArgs += "/StoreFile:`"$($storeFile.FullName)`"" }
-            try { & $wcd.Exe @icdArgs 2>&1 | Out-String | Add-Content (Join-Path $WorkFolder "ICD-build-$script:Stamp.log") }
-            catch { Write-Warn2 "ICD.exe could not run from the command line ($($_.Exception.Message))." }
-            Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue   # it holds the token
-            if (Test-Path $ppkg) { $built = $true }
-            else { Write-Warn2 "ICD.exe did not produce a package (log: ICD-build-$script:Stamp.log). The Store version sometimes blocks command-line builds; using the guided route instead." }
+            Write-Host "Building with the $($w.Source) Configuration Designer..." -ForegroundColor Cyan
+            try { Invoke-Icd $w $icdArgs $log } catch { Write-Warn2 "$($w.Source) build failed: $($_.Exception.Message)" }
+            if (Test-Path $ppkg) { $built = $true; break }
         }
+        Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue   # it holds the token
     }
-    else { Write-Warn2 'This Windows Configuration Designer version cannot be run from the command line. Using the guided route.' }
 
     if ($built) {
         Write-Ok "Package built: $ppkg"
