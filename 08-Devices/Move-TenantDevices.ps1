@@ -43,6 +43,16 @@
     this machine's dsregcmd TenantId is different, it stops before changing anything. Strongly recommended for
     MoveDevice.
 
+.PARAMETER PackageName
+    Option 1 only: package file name. Default: <tenant domain>-join-<date>.
+
+.PARAMETER TokenDays
+    Option 1 only: how long the package can join devices (1 to 180 days). Default 180.
+
+.PARAMETER RenamePattern
+    Option 1 only: rename laptops on join, for example TG-%SERIAL% (15 characters at most once expanded).
+    Default: keep their names.
+
 .PARAMETER AllowWizard
     Option 1 only: if the silent build fails, open the Windows Configuration Designer wizard instead of stopping.
     Off by default, so option 1 is no-touch.
@@ -67,7 +77,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.7
+    Version : 1.0.8
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -77,6 +87,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.8  2026-11-10  Option 1 asks nothing: tenant, account and package name come from the sign-in (-PackageName,
+                         -TokenDays, -RenamePattern to override). Sign-in window first (Windows broker removed: AADSTS50011).
       1.0.7  2026-11-10  Option 1 sign-in runs in a clean child PowerShell, so it works when Microsoft Graph is already
                          loaded in the session (its sign-in library is otherwise out of reach).
       1.0.6  2026-11-10  Option 1 is no-touch: builds with the ADK designer or a copy of the Store designer run from the
@@ -114,6 +126,9 @@ param(
     [string]$ExportFolder,
     [string]$GroupMappingFile,
     [string]$LocalAdminName = 'migadmin',
+    [string]$PackageName,
+    [ValidateRange(1, 180)][int]$TokenDays = 180,
+    [string]$RenamePattern,
     [switch]$UseDeviceCode,
     [switch]$AllowWizard,
     [switch]$Force
@@ -232,9 +247,11 @@ function Install-Wcd {
 function Get-DrsAccessToken([string]$TenantId, [string]$Admin) {
     # Modern, interactive sign-in for the device registration service, so MFA and Conditional Access apply and
     # tenants that block device code still work. Uses MSAL from the Microsoft.Graph.Authentication module.
-    # Runs in a clean child PowerShell (-NoProfile): once Microsoft Graph is imported, its copy of MSAL sits in a
-    # private load context that the session can't use, and loading a second copy beside it fails.
-    # Tries, in order: the Windows sign-in broker (WAM), the system browser, then the sign-in window (Windows PowerShell).
+    # Runs in a clean child Windows PowerShell (-NoProfile): once Microsoft Graph is imported, its copy of MSAL sits in
+    # a private load context the session can't use. Windows PowerShell also gives MSAL its built-in sign-in window.
+    # The tenant and account come from the sign-in itself, so nothing has to be typed first.
+    # Tries, in order: the sign-in window, then the system browser. Not the Windows broker: the first-party apps
+    # that can get a device registration token have no broker redirect URI (AADSTS50011).
     $mod = Get-Module -ListAvailable Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1
     if (-not $mod) { throw 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser first (it provides the Microsoft sign-in library).' }
     $tmpDir = Join-Path $env:LOCALAPPDATA 'MigrationToolkit'; New-Item -ItemType Directory -Path $tmpDir -Force -WhatIf:$false | Out-Null
@@ -254,31 +271,25 @@ if (-not ('Win32Mig.Native' -as [type])) { Add-Type -Namespace Win32Mig -Name Na
 $hwnd = [Win32Mig.Native]::GetConsoleWindow(); if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32Mig.Native]::GetForegroundWindow() }
 $scope = [string[]]@('urn:ms-drs:enterpriseregistration.windows.net/.default')
 $wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'; $aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'
+$authority = if ($TenantId) { "https://login.microsoftonline.com/$TenantId" } else { 'https://login.microsoftonline.com/organizations' }
 $attempts = @(
-    @{ Label = 'Windows sign-in broker (WAM)'; Client = $wcd; Mode = 'Broker' },
-    @{ Label = 'Windows sign-in broker (device registration client)'; Client = $aadps; Mode = 'Broker' },
-    @{ Label = 'system browser'; Client = $wcd; Mode = 'Browser' },
-    @{ Label = 'system browser (device registration client)'; Client = $aadps; Mode = 'Browser' },
-    @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' }
+    @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' },
+    @{ Label = 'system browser'; Client = $aadps; Mode = 'Browser' },
+    @{ Label = 'system browser (configuration designer client)'; Client = $wcd; Mode = 'Browser' }
 )
 foreach ($a in $attempts) {
     if ($a.Mode -eq 'Embedded' -and $edition -eq 'Core') { continue }
     try {
         Write-Host "Signing in with the $($a.Label)..." -ForegroundColor Cyan
-        $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority("https://login.microsoftonline.com/$TenantId")
-        switch ($a.Mode) {
-            'Broker'   { if (-not ('Microsoft.Identity.Client.Broker.BrokerExtension' -as [type])) { throw 'broker library not available' }
-                         $opt = [Microsoft.Identity.Client.BrokerOptions]::new([Microsoft.Identity.Client.BrokerOptions+OperatingSystems]::Windows)
-                         $b = [Microsoft.Identity.Client.Broker.BrokerExtension]::WithBroker($b, $opt) }
-            'Browser'  { $b = $b.WithRedirectUri('http://localhost') }
-            'Embedded' { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
-        }
+        $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority($authority)
+        if ($a.Mode -eq 'Browser') { $b = $b.WithRedirectUri('http://localhost') } else { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
         $req = $b.Build().AcquireTokenInteractive($scope).WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount).WithParentActivityOrWindow($hwnd)
         if ($Admin) { $req = $req.WithLoginHint($Admin) }
         if ($a.Mode -eq 'Embedded') { $req = $req.WithUseEmbeddedWebView($true) }
         $res = $req.ExecuteAsync().GetAwaiter().GetResult()
         if ($res.AccessToken) {
-            [IO.File]::WriteAllText($TokFile, $res.AccessToken)
+            $out = @{ Token = $res.AccessToken; TenantId = $res.TenantId; Upn = $res.Account.Username } | ConvertTo-Json -Compress
+            [IO.File]::WriteAllText($TokFile, $out)
             Write-Host "   OK   Signed in as $($res.Account.Username) ($($a.Label))" -ForegroundColor Green
             exit 0
         }
@@ -289,32 +300,37 @@ exit 1
 '@
     $child = $child.Replace('__TENANT__', $TenantId).Replace('__ADMIN__', ($Admin -replace "'", "''")).Replace('__MODBASE__', ($mod.ModuleBase -replace "'", "''")).Replace('__TOKFILE__', ($tokFile -replace "'", "''"))
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
-    $exe = (Get-Process -Id $PID).Path
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $exe)) { $exe = (Get-Process -Id $PID).Path }
     try {
         & $exe -NoProfile -NonInteractive -EncodedCommand $enc | Out-Host
-        if (Test-Path $tokFile) { return (Get-Content $tokFile -Raw).Trim() }
+        if (Test-Path $tokFile) { return (Get-Content $tokFile -Raw | ConvertFrom-Json) }
     }
     finally { Remove-Item $tokFile -Force -ErrorAction SilentlyContinue }
     throw 'No interactive sign-in method was accepted (see the warnings above).'
 }
+function Get-JwtClaims([string]$Jwt) {
+    $p = $Jwt.Split('.')[1].Replace('-', '+').Replace('_', '/'); while ($p.Length % 4) { $p += '=' }
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+}
 function Get-DrsAccessTokenDeviceCode([string]$TenantId, [string]$Admin) {
     # Only with -UseDeviceCode: many tenants block device code flow by Conditional Access
+    if (-not $TenantId) { $TenantId = 'organizations' }
     $client = 'b90d5b8f-5503-4153-b545-b31cecfaece2'; $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
     $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/devicecode" -Body @{ client_id = $client; resource = $drs }
     Write-Host $dc.message -ForegroundColor Yellow
     $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds ([int]$dc.interval)
-        try { $t = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $client; code = $dc.device_code; resource = $drs }; if ($t.access_token) { return $t.access_token } }
+        try { $t = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $client; code = $dc.device_code; resource = $drs }; if ($t.access_token) { $c = Get-JwtClaims $t.access_token; return [pscustomobject]@{ Token = $t.access_token; TenantId = $c.tid; Upn = $c.upn } } }
         catch { $bd = ''; try { $bd = $_.ErrorDetails.Message } catch {}; if ($bd -notmatch 'authorization_pending') { throw } }
     }
     throw 'Sign-in timed out.'
 }
-function Get-BulkToken([string]$TenantId, [string]$Admin, [int]$Days, [string]$PackageName) {
+function Get-BulkToken($SignIn, [int]$Days) {
     # The same call Windows Configuration Designer makes behind "Get Bulk Token": it creates the package_<guid>
     # account in the tenant and returns a bulk token that lets devices join without a user signing in.
-    $at = if ($UseDeviceCode) { Get-DrsAccessTokenDeviceCode $TenantId $Admin } else { Get-DrsAccessToken $TenantId $Admin }
-    $h = @{ Authorization = "Bearer $at" }
+    $h = @{ Authorization = "Bearer $($SignIn.Token)" }
     $pid0 = [guid]::NewGuid().ToString()
     $body = @{ pid = $pid0; name = "package_$pid0"; exp = (Get-Date).AddDays($Days).ToString('MM/dd/yyyy') } | ConvertTo-Json
     $r = Invoke-RestMethod -Method Post 'https://login.microsoftonline.com/webapp/bulkaadjtoken/begin' -Headers $h -Body $body -ContentType 'application/json'
@@ -373,21 +389,23 @@ function Invoke-BuildPackage {
     $wcd = Find-Wcd
     if ($wcd) { Write-Ok "Windows Configuration Designer found ($($wcd.Source) version)" }
 
-    if (-not $DestinationTenantId) { $DestinationTenantId = Read-Host 'Destination tenant ID (GUID)' }
-    if (-not $DestinationAdmin) { $DestinationAdmin = Read-Host 'Destination admin sign-in (e.g. admin@contoso.com)' }
-    $name = Read-Host 'Package name (letters, digits and hyphens, e.g. contoso-join)'
-    if (-not $name) { $name = 'tenant-join' }
+    # Sign in first: the tenant, the account and a sensible package name all come from the sign-in
+    $signIn = $null
+    try { $signIn = if ($UseDeviceCode) { Get-DrsAccessTokenDeviceCode $DestinationTenantId $DestinationAdmin } else { Get-DrsAccessToken $DestinationTenantId $DestinationAdmin } }
+    catch { Write-Warn2 "Sign-in failed: $($_.Exception.Message)"; Write-Warn2 'The package was not built. Nothing was opened.'; return }
+    $domain = if ($signIn.Upn -match '@(.+)$') { $Matches[1] } else { 'tenant' }
+    Write-Ok "Destination tenant: $domain ($($signIn.TenantId))"
+    $name = if ($PackageName) { $PackageName } else { "$(($domain -split '\.')[0])-join-$(Get-Date -Format yyyyMMdd-HHmm)" }
     $name = $name -replace '[^A-Za-z0-9-]', ''
-    $expiry = Read-Host 'Token validity in days (max 180, default 180)'
-    if (-not $expiry) { $expiry = 180 }
-    $expiry = [Math]::Min(180, [int]$expiry)
-    $rename = Read-Host 'Rename laptops on join? Pattern like TG-%SERIAL% (max 15 characters in total), or Enter to keep names'
+    $expiry = $TokenDays
+    $rename = $RenamePattern
+    if ($rename -and ($rename -replace '%SERIAL%', 'XXXXXXXX' -replace '%RAND:(\d+)%', 'XXXX').Length -gt 15) { Write-Warn2 "Rename pattern '$rename' may exceed 15 characters on some laptops; Windows truncates it." }
     $ppkg = Join-Path $WorkFolder "$name.ppkg"
     $log = Join-Path $WorkFolder "ICD-build-$script:Stamp.log"
 
     $built = $false
     $bprt = $null
-    try { $bprt = Get-BulkToken $DestinationTenantId $DestinationAdmin $expiry $name; Write-Ok "Bulk token received (valid $expiry days)" }
+    try { $bprt = Get-BulkToken $signIn $expiry; Write-Ok "Bulk token received (valid $expiry days)" }
     catch { Write-Warn2 "Bulk token request failed: $($_.Exception.Message)" }
 
     if ($bprt) {
@@ -445,7 +463,7 @@ function Invoke-BuildPackage {
 2. Name: $name. Next.
 3. Set up device: leave the device name BLANK (a pattern renames every laptop and adds a restart). Turn off "Remove pre-installed software". Next.
 4. Set up network: turn it OFF. Next.
-5. Account management: choose "Enroll in Azure AD". Bulk Token Expiry: $expiry days from today. Click "Get Bulk Token" and sign in as $DestinationAdmin.
+5. Account management: choose "Enroll in Azure AD". Bulk Token Expiry: $expiry days from today. Click "Get Bulk Token" and sign in as $($signIn.Upn).
    If it asks "Allow my organization to manage my device", untick it and choose "This app only".
 6. Add applications / certificates: skip. Finish: click Create. It shows the folder it saved to.
 "@ -ForegroundColor Yellow
