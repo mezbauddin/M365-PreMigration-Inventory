@@ -21,7 +21,7 @@
     UserMapping.csv from 02b (columns Source, Destination). Rebuild it after cutover: sign-ins change.
 
 .PARAMETER Users
-    User names (aperez) or source sign-ins (aperez@fabrikam.onmicrosoft.com). Matched against the Source column.
+    User names (kim) or source sign-ins (kim@fabrikam.onmicrosoft.com). Matched against the Source column.
 
 .PARAMETER SourceAdminUrl / DestinationAdminUrl
     SharePoint admin URLs, e.g. https://fabrikam-admin.sharepoint.com
@@ -46,7 +46,7 @@
 
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Copy-PeopleOneDrives.ps1 -MappingFile .\Mapping-PostCutover\UserMapping.csv `
-        -Users aperez, jmcevoy, ktaylor -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
+        -Users kim, lee, sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
         -DestinationAdminUrl https://contoso-admin.sharepoint.com -DestinationAdmin admin@contoso.com -SgumFile .\Mapping-PostCutover\UserMapping.sgum
 
 .NOTES
