@@ -1033,9 +1033,8 @@ function Invoke-HandoverProfile {
         }
         finally { $ErrorActionPreference = $eap }
         # The folder itself must now belong to the new account; anything inside that was skipped is logged
-        $owner = (Get-Acl $old.Path).Owner
-        $ownerSid = try { ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch { $owner }
-        if ($ownerSid -ne $new.Sid) { throw "Ownership did not change on $($old.Path) (owner is $owner). See $log" }
+        $ownerSid = (Get-Acl $old.Path).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -ne $new.Sid) { throw "Ownership did not change on $($old.Path) (owner is $ownerSid). See $log" }
         # 3. Registry hives inside the profile
         Grant-HiveAccess (Join-Path $old.Path 'NTUSER.DAT') $new.Sid
         $usr = Join-Path $old.Path 'AppData\Local\Microsoft\Windows\UsrClass.dat'
