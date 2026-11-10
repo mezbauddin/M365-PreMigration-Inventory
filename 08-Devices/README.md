@@ -208,6 +208,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.9 | 2026-11-10 | Move-TenantDevices 1.0.9: option 1 sign-in is plain PowerShell (OAuth code flow in a sign-in window, then the browser with PKCE). No dependency on MSAL files from other modules. |
 | 1.2.8 | 2026-11-10 | Move-TenantDevices 1.0.8: option 1 asks nothing. Tenant, account and package name come from the sign-in; `-PackageName`, `-TokenDays`, `-RenamePattern` override. Windows broker dropped (AADSTS50011 for the device registration clients). |
 | 1.2.7 | 2026-11-10 | Move-TenantDevices 1.0.7: option 1 sign-in runs in a clean child PowerShell, so it works when Microsoft Graph is already loaded. |
 | 1.2.6 | 2026-11-10 | Move-TenantDevices 1.0.6: option 1 is no-touch. Builds from the command line (ADK designer, or the Store designer copied out of its sandbox), installs the ADK designer silently if needed, shows the exact error and never opens the wizard unless `-AllowWizard`. |

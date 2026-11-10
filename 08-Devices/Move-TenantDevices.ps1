@@ -77,7 +77,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.8
+    Version : 1.0.9
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -87,6 +87,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.9  2026-11-10  Option 1 sign-in no longer depends on MSAL files from other modules: plain OAuth code flow in a
+                         sign-in window, then the system browser with PKCE.
       1.0.8  2026-11-10  Option 1 asks nothing: tenant, account and package name come from the sign-in (-PackageName,
                          -TokenDays, -RenamePattern to override). Sign-in window first (Windows broker removed: AADSTS50011).
       1.0.7  2026-11-10  Option 1 sign-in runs in a clean child PowerShell, so it works when Microsoft Graph is already
@@ -245,65 +247,97 @@ function Install-Wcd {
 }
 
 function Get-DrsAccessToken([string]$TenantId, [string]$Admin) {
-    # Modern, interactive sign-in for the device registration service, so MFA and Conditional Access apply and
-    # tenants that block device code still work. Uses MSAL from the Microsoft.Graph.Authentication module.
-    # Runs in a clean child Windows PowerShell (-NoProfile): once Microsoft Graph is imported, its copy of MSAL sits in
-    # a private load context the session can't use. Windows PowerShell also gives MSAL its built-in sign-in window.
-    # The tenant and account come from the sign-in itself, so nothing has to be typed first.
-    # Tries, in order: the sign-in window, then the system browser. Not the Windows broker: the first-party apps
-    # that can get a device registration token have no broker redirect URI (AADSTS50011).
-    $mod = Get-Module -ListAvailable Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1
-    if (-not $mod) { throw 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser first (it provides the Microsoft sign-in library).' }
+    # Modern, interactive sign-in for the device registration service (OAuth 2.0 authorization code flow), so MFA
+    # and Conditional Access apply and tenants that block device code still work. No libraries: plain PowerShell.
+    # Runs in a clean child Windows PowerShell (STA) so it is unaffected by modules loaded in this session.
+    # Tries: a sign-in window, then the system browser (localhost redirect with PKCE).
+    # The Windows broker is not used: the first-party apps that can get this token have no broker redirect (AADSTS50011).
     $tmpDir = Join-Path $env:LOCALAPPDATA 'MigrationToolkit'; New-Item -ItemType Directory -Path $tmpDir -Force -WhatIf:$false | Out-Null
     $tokFile = Join-Path $tmpDir "drs-$([guid]::NewGuid()).tmp"
     $child = @'
 $ErrorActionPreference = 'Stop'
-$TenantId = '__TENANT__'; $Admin = '__ADMIN__'; $ModBase = '__MODBASE__'; $TokFile = '__TOKFILE__'
-$edition = if ($PSVersionTable.PSEdition -eq 'Core') { 'Core' } else { 'Desktop' }
-$dlls = @(Get-ChildItem $ModBase -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Microsoft.Identity*' -or $_.Name -like 'Microsoft.IdentityModel.Abstractions*' })
-foreach ($n in 'Microsoft.IdentityModel.Abstractions.dll', 'Microsoft.Identity.Client.dll', 'Microsoft.Identity.Client.NativeInterop.dll', 'Microsoft.Identity.Client.Broker.dll', 'Microsoft.Identity.Client.Desktop.dll') {
-    $c = @($dlls | Where-Object Name -eq $n); $e = @($c | Where-Object { $_.FullName -match "\\$edition\\" })
-    $f = if ($e) { $e[0] } elseif ($c) { $c[0] } else { $null }
-    if ($f) { try { Add-Type -Path $f.FullName } catch { if ($n -eq 'Microsoft.Identity.Client.dll') { Write-Host "   WARN load $n : $($_.Exception.Message)" -ForegroundColor Yellow } } }
+$TenantId = '__TENANT__'; $Admin = '__ADMIN__'; $TokFile = '__TOKFILE__'
+$tenantPath = if ($TenantId) { $TenantId } else { 'common' }
+$drs = 'urn:ms-drs:enterpriseregistration.windows.net'
+$aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'   # Azure AD PowerShell: first-party client for device registration tokens
+$wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'     # Windows Configuration Designer
+Add-Type -AssemblyName System.Windows.Forms, System.Web
+function Enc([string]$v) { [uri]::EscapeDataString($v) }
+function Get-AuthUrl($client, $redirect, $extra) {
+    $u = "https://login.microsoftonline.com/$tenantPath/oauth2/authorize?client_id=$client&response_type=code&redirect_uri=$(Enc $redirect)&resource=$(Enc $drs)&prompt=select_account"
+    if ($Admin) { $u += "&login_hint=$(Enc $Admin)" }
+    $u + $extra
 }
-if (-not ('Microsoft.Identity.Client.PublicClientApplicationBuilder' -as [type])) { Write-Host '   WARN The Microsoft sign-in library (MSAL) could not be loaded.' -ForegroundColor Yellow; exit 2 }
-if (-not ('Win32Mig.Native' -as [type])) { Add-Type -Namespace Win32Mig -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();' }
-$hwnd = [Win32Mig.Native]::GetConsoleWindow(); if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32Mig.Native]::GetForegroundWindow() }
-$scope = [string[]]@('urn:ms-drs:enterpriseregistration.windows.net/.default')
-$wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'; $aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'
-$authority = if ($TenantId) { "https://login.microsoftonline.com/$TenantId" } else { 'https://login.microsoftonline.com/organizations' }
-$attempts = @(
-    @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' },
-    @{ Label = 'system browser'; Client = $aadps; Mode = 'Browser' },
-    @{ Label = 'system browser (configuration designer client)'; Client = $wcd; Mode = 'Browser' }
-)
-foreach ($a in $attempts) {
-    if ($a.Mode -eq 'Embedded' -and $edition -eq 'Core') { continue }
+function Redeem($client, $code, $redirect, $verifier) {
+    $body = @{ grant_type = 'authorization_code'; client_id = $client; code = $code; redirect_uri = $redirect; resource = $drs }
+    if ($verifier) { $body.code_verifier = $verifier }
+    $t = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$tenantPath/oauth2/token" -Body $body
+    $p = $t.access_token.Split('.')[1].Replace('-', '+').Replace('_', '/'); while ($p.Length % 4) { $p += '=' }
+    $c = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+    $upn = if ($c.upn) { $c.upn } else { $c.unique_name }
+    [IO.File]::WriteAllText($TokFile, (@{ Token = $t.access_token; TenantId = $c.tid; Upn = $upn } | ConvertTo-Json -Compress))
+    Write-Host "   OK   Signed in as $upn" -ForegroundColor Green
+}
+function Read-Result([string]$url) {
+    $q = [Web.HttpUtility]::ParseQueryString(([uri]$url).Query)
+    if ($q['error']) { throw "$($q['error']): $($q['error_description'])" }
+    $q['code']
+}
+
+# 1. Sign-in window (same approach as the Azure AD PowerShell module). Uses the modern rendering mode.
+try {
+    Write-Host 'Signing in with the sign-in window...' -ForegroundColor Cyan
+    $fe = 'HKCU:\Software\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION'
+    if (-not (Test-Path $fe)) { New-Item $fe -Force | Out-Null }
+    Set-ItemProperty $fe -Name 'powershell.exe' -Value 11001 -Type DWord
+    $oob = 'urn:ietf:wg:oauth:2.0:oob'
+    $form = New-Object Windows.Forms.Form -Property @{ Width = 520; Height = 720; Text = 'Sign in to the destination tenant'; StartPosition = 'CenterScreen'; TopMost = $true }
+    $web = New-Object Windows.Forms.WebBrowser -Property @{ Dock = 'Fill'; ScriptErrorsSuppressed = $true }
+    $form.Controls.Add($web)
+    $script:result = $null
+    $check = { param($u) if ($u -match 'oauth2/nativeclient' -or $u -like 'urn:ietf:wg:oauth*') { $script:result = $u; $form.Close() } }
+    $web.add_Navigating({ param($s, $e) & $check $e.Url.AbsoluteUri })
+    $web.add_Navigated({ param($s, $e) & $check $e.Url.AbsoluteUri })
+    $web.Navigate((Get-AuthUrl $aadps $oob ''))
+    [void]$form.ShowDialog()
+    if (-not $script:result) { throw 'the window was closed before sign-in finished' }
+    Redeem $aadps (Read-Result $script:result) $oob $null
+    exit 0
+}
+catch { Write-Host "   WARN sign-in window: $($_.Exception.Message)" -ForegroundColor Yellow }
+
+# 2. System browser with a localhost redirect and PKCE
+foreach ($client in $aadps, $wcd) {
+    $http = $null
     try {
-        Write-Host "Signing in with the $($a.Label)..." -ForegroundColor Cyan
-        $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority($authority)
-        if ($a.Mode -eq 'Browser') { $b = $b.WithRedirectUri('http://localhost') } else { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
-        $req = $b.Build().AcquireTokenInteractive($scope).WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount).WithParentActivityOrWindow($hwnd)
-        if ($Admin) { $req = $req.WithLoginHint($Admin) }
-        if ($a.Mode -eq 'Embedded') { $req = $req.WithUseEmbeddedWebView($true) }
-        $res = $req.ExecuteAsync().GetAwaiter().GetResult()
-        if ($res.AccessToken) {
-            $out = @{ Token = $res.AccessToken; TenantId = $res.TenantId; Upn = $res.Account.Username } | ConvertTo-Json -Compress
-            [IO.File]::WriteAllText($TokFile, $out)
-            Write-Host "   OK   Signed in as $($res.Account.Username) ($($a.Label))" -ForegroundColor Green
-            exit 0
-        }
+        Write-Host "Signing in with the system browser ($(if ($client -eq $aadps) { 'device registration client' } else { 'configuration designer client' }))..." -ForegroundColor Cyan
+        $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop()
+        $redirect = "http://localhost:$port/"
+        $bytes = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $verifier = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        $hash = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier))
+        $challenge = [Convert]::ToBase64String($hash).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        $http = [Net.HttpListener]::new(); $http.Prefixes.Add($redirect); $http.Start()
+        Start-Process (Get-AuthUrl $client $redirect "&code_challenge=$challenge&code_challenge_method=S256")
+        Write-Host '   Finish the sign-in in your browser (this attempt gives up after 3 minutes; if the browser shows an error, wait for the next one).' -ForegroundColor Gray
+        $task = $http.GetContextAsync()
+        if (-not $task.Wait([TimeSpan]::FromMinutes(3))) { throw 'timed out waiting for the browser' }
+        $ctx = $task.Result
+        $msg = [Text.Encoding]::UTF8.GetBytes('<html><body style="font-family:Segoe UI">Signed in. You can close this tab and go back to PowerShell.</body></html>')
+        $ctx.Response.ContentType = 'text/html'; $ctx.Response.OutputStream.Write($msg, 0, $msg.Length); $ctx.Response.Close()
+        Redeem $client (Read-Result $ctx.Request.Url.AbsoluteUri) $redirect $verifier
+        exit 0
     }
-    catch { $x = $_.Exception; while ($x.InnerException) { $x = $x.InnerException }; Write-Host "   WARN $($a.Label): $($x.Message)" -ForegroundColor Yellow }
+    catch { Write-Host "   WARN system browser: $($_.Exception.Message)" -ForegroundColor Yellow }
+    finally { if ($http) { $http.Close() } }
 }
 exit 1
 '@
-    $child = $child.Replace('__TENANT__', $TenantId).Replace('__ADMIN__', ($Admin -replace "'", "''")).Replace('__MODBASE__', ($mod.ModuleBase -replace "'", "''")).Replace('__TOKFILE__', ($tokFile -replace "'", "''"))
+    $child = $child.Replace('__TENANT__', $TenantId).Replace('__ADMIN__', ($Admin -replace "'", "''")).Replace('__TOKFILE__', ($tokFile -replace "'", "''"))
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
     $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path $exe)) { $exe = (Get-Process -Id $PID).Path }
     try {
-        & $exe -NoProfile -NonInteractive -EncodedCommand $enc | Out-Host
+        & $exe -NoProfile -STA -ExecutionPolicy Bypass -EncodedCommand $enc | Out-Host
         if (Test-Path $tokFile) { return (Get-Content $tokFile -Raw | ConvertFrom-Json) }
     }
     finally { Remove-Item $tokFile -Force -ErrorAction SilentlyContinue }
