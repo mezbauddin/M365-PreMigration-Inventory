@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.1.1
+    Version : 1.2.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,9 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.0  2026-11-10  Pick by number instead of typing: profiles, package, local admin password (can generate one),
+                         leave / handover / restart confirmations. Entra profiles found by SID (S-1-12-1-*), so option 5
+                         works when Windows shows a tenant prefix instead of AzureAD\. Package auto-found in the work folder.
       1.1.1  2026-11-10  Relaunches itself in 64-bit PowerShell when started from 32-bit (x86) PowerShell, where dsregcmd
                          is not found.
       1.1.0  2026-11-10  Option 7: clean up the admin PC (designer copies, temp files, sign-in setting, build logs, and on
@@ -203,7 +206,8 @@ function Get-Profiles {
     Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.LocalPath -like "$env:SystemDrive\Users\*" } | ForEach-Object {
         $sid = $_.SID
         $name = try { ([Security.Principal.SecurityIdentifier]$sid).Translate([Security.Principal.NTAccount]).Value } catch { '(unknown account)' }
-        [pscustomobject]@{ Folder = Split-Path $_.LocalPath -Leaf; Path = $_.LocalPath; Account = $name; Sid = $sid
+        # Entra accounts have S-1-12-1-* SIDs. Their display name varies (AzureAD\name, or a tenant prefix like CONTOSO\name)
+        [pscustomobject]@{ Folder = Split-Path $_.LocalPath -Leaf; Path = $_.LocalPath; Account = $name; Sid = $sid; IsEntra = ($sid -like 'S-1-12-1-*')
                            Created = (Get-Item $_.LocalPath -ErrorAction SilentlyContinue).CreationTime; LastUsed = $_.LastUseTime; Loaded = $_.Loaded }
     } | Sort-Object Created
 }
@@ -229,6 +233,36 @@ function Get-GraphAll($uri) {
         $uri = if ($p) { $p.'@odata.nextLink' } else { $null }
     }
     $out.ToArray()
+}
+function Select-FromList([string]$Title, [object[]]$Items, [scriptblock]$Label, [int]$Default = 0, [switch]$NoDefault) {
+    # Numbered picker: type a number (or press Enter for the default). 0 stops. Works over any remote session.
+    $Items = @($Items | Where-Object { $_ })
+    if (-not $Items) { return $null }
+    Write-Host "`n$Title" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        $mark = if (-not $NoDefault -and $i -eq $Default) { '   <- Enter' } else { '' }
+        Write-Host ('  {0}  {1}{2}' -f ($i + 1), (& $Label $Items[$i]), $mark)
+    }
+    Write-Host '  0  Stop'
+    while ($true) {
+        $hint = if ($NoDefault -and $Items.Count -eq 1) { 'Type 1 to go ahead, 0 to stop' } elseif ($NoDefault) { "Number (1-$($Items.Count), 0 to stop)" } else { "Number (Enter = $($Default + 1), 0 to stop)" }
+        $a = (Read-Host $hint).Trim()
+        if ($a -eq '' -and -not $NoDefault) { return $Items[$Default] }
+        if ($a -eq '0') { return $null }
+        $n = 0
+        if ([int]::TryParse($a, [ref]$n) -and $n -ge 1 -and $n -le $Items.Count) { return $Items[$n - 1] }
+        Write-Host "Type a number from 0 to $($Items.Count)." -ForegroundColor Yellow
+    }
+}
+function Confirm-Go([string]$Title, [string]$GoLabel = 'Yes, go ahead', [switch]$NoDefault) {
+    # 1 = go, 0 = stop. -NoDefault for irreversible steps: Enter alone does nothing.
+    $r = Select-FromList $Title @($GoLabel) { param($x) $x } -NoDefault:$NoDefault
+    [bool]$r
+}
+function New-StrongPassword {
+    $chars = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%*@'
+    $bytes = New-Object byte[] 20; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
 }
 function Read-Choice($prompt, $options) {
     while ($true) { $a = Read-Host $prompt; if ($options -contains $a) { return $a }; Write-Host "Type one of: $($options -join ', ')" -ForegroundColor Yellow }
@@ -748,13 +782,19 @@ function Invoke-MoveDevice {
             Write-Warn2 "No -SourceTenantId given. Before leaving you will have to type the tenant name '$($ds.TenantName)' exactly. If this is your own PC, stop now."
         }
         $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1); if ($free -lt 5) { Write-Warn2 "Only $free GB free on C:" } else { Write-Ok "$free GB free on C:" }
-        if ($env:USERNAME -and (Get-Profiles | Where-Object { $_.Loaded -and $_.Account -like 'AzureAD\*' })) { Write-Warn2 'A Microsoft Entra user is signed in. Finish this stage, then restart and sign in as the local admin for stage 2.' }
+        if ($env:USERNAME -and (Get-Profiles | Where-Object { $_.Loaded -and $_.IsEntra })) { Write-Warn2 'A Microsoft Entra user is signed in. Finish this stage, then restart and sign in as the local admin for stage 2.' }
 
         $profiles = @(Get-Profiles)
-        $profiles | Format-Table Folder, Account, Created, LastUsed -AutoSize | Out-String -Width 200 | Write-Host
-        if (-not $OldProfile) { $OldProfile = Read-Host 'Which profile folder belongs to the person who uses this laptop? (Folder column)' }
-        $old = $profiles | Where-Object { $_.Folder -eq (Split-Path $OldProfile -Leaf) } | Select-Object -First 1
+        if ($OldProfile) { $old = $profiles | Where-Object { $_.Folder -eq (Split-Path $OldProfile -Leaf) } | Select-Object -First 1 }
+        else {
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $cands = @($profiles | Where-Object { $_.Sid -ne $me -and $_.Folder -ne $LocalAdminName } | Sort-Object @{ e = { $_.IsEntra }; Descending = $true }, @{ e = { $_.LastUsed }; Descending = $true })
+            if (-not $cands) { $cands = $profiles }
+            $old = Select-FromList 'Whose profile is this laptop''s? (the person moving, not you)' $cands { param($x) '{0,-22} {1,-34} last used {2}' -f $x.Folder, $x.Account, $x.LastUsed }
+            if (-not $old) { Write-Warn2 'Stopped. Nothing changed.'; return }
+        }
         if (-not $old) { throw "No profile folder '$OldProfile'." }
+        Write-Ok "Profile: $($old.Path) ($($old.Account))"
 
         $snap = Join-Path $WorkFolder "Prepare-$env:COMPUTERNAME-$script:Stamp.txt"
         $lines = [System.Collections.Generic.List[string]]::new()
@@ -770,7 +810,15 @@ function Invoke-MoveDevice {
 
         if (-not (Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue)) {
             if ($PSCmdlet.ShouldProcess("Local admin '$LocalAdminName'", 'Create')) {
-                $pw = Read-Host "Password for the local admin '$LocalAdminName' (keep it in your password manager)" -AsSecureString
+                $how = Select-FromList "Password for the local admin '$LocalAdminName'" @('Make a strong one for me (shown once)', 'I will type my own') { param($x) $x }
+                if (-not $how) { Write-Warn2 'Stopped. Nothing changed.'; return }
+                if ($how -like 'Make*') {
+                    $plain = New-StrongPassword
+                    Write-Host "`n   $LocalAdminName password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
+                    Write-Host '   Save it in your password manager now (select it and right-click to copy). It is not stored anywhere.' -ForegroundColor Yellow
+                    if (-not (Confirm-Go 'Saved it?' 'Yes, saved' -NoDefault)) { Write-Warn2 'Stopped. Nothing changed.'; return }
+                    $pw = ConvertTo-SecureString $plain -AsPlainText -Force; $plain = $null
+                } else { $pw = Read-Host "Type the password for '$LocalAdminName'" -AsSecureString }
                 New-LocalUser -Name $LocalAdminName -Password $pw -PasswordNeverExpires -AccountNeverExpires -Description 'Tenant migration safety net' | Out-Null
                 Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalAdminName
                 Write-Ok "Local admin '$LocalAdminName' created"
@@ -792,8 +840,10 @@ function Invoke-MoveDevice {
     if ($state.Stage -eq 'Prepared') {
         # ----- Stage 1b: leave
         if (-not $PackagePath -and -not $state.Package) {
-            $p = Read-Host 'Path to the enrolment package (.ppkg) from option 1 (Enter to join by hand later)'
-            if ($p) { if (-not (Test-Path $p)) { throw "$p not found" }; Add-State 'Package' $p }
+            $found = @(Get-ChildItem $WorkFolder, $PSScriptRoot -Filter *.ppkg -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Unique)
+            $pick = Select-FromList 'Which enrolment package joins this laptop to the new tenant?' $found { param($x) '{0}   ({1})' -f $x.Name, $x.LastWriteTime }
+            if ($pick) { Add-State 'Package' $pick.FullName }
+            else { Write-Warn2 "No package chosen. Put the .ppkg in $WorkFolder before stage 2, or join by hand." }
         } elseif ($PackagePath) { Add-State 'Package' $PackagePath }
         Write-Host @"
 About to leave $($state.OldTenantName). After this:
@@ -809,14 +859,14 @@ About to leave $($state.OldTenantName). After this:
             if ($whyNot) { throw "STOP: $whyNot Not leaving the tenant without another way in." }
             if ($SourceTenantId) {
                 if ($live.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) { throw "STOP: this machine is joined to $($live.TenantName) ($($live.TenantId)), not the source tenant $SourceTenantId. Nothing has changed." }
-                if ((Read-Choice 'Type LEAVE to continue, or N to stop' @('LEAVE', 'N', 'n')) -ne 'LEAVE') { return }
+                if (-not (Confirm-Go "Take this laptop out of $($live.TenantName)?" "Yes, leave $($live.TenantName)" -NoDefault)) { Write-Warn2 'Stopped. Nothing changed.'; return }
             }
             else {
                 if (-not $live.TenantName) { throw 'dsregcmd shows no tenant name to confirm. Run again with -SourceTenantId <source-guid>.' }
                 Write-Host "This machine is joined to: $($live.TenantName)  ($($live.TenantId))" -ForegroundColor Yellow
-                Write-Host 'If that is not the source tenant you are migrating from, or this is your own PC, type N.' -ForegroundColor Yellow
-                $typed = Read-Host "Type the tenant name exactly ($($live.TenantName)) to leave it, or N to stop"
-                if ($typed.Trim() -cne $live.TenantName) { Write-Warn2 'Name did not match. Nothing changed.'; return }
+                Write-Host 'If that is not the tenant you are migrating from, or this is your own PC, choose 0.' -ForegroundColor Yellow
+                Write-Host "Computer: $env:COMPUTERNAME   Person: $($state.OldProfile)" -ForegroundColor Yellow
+                if (-not (Confirm-Go "Take $env:COMPUTERNAME out of $($live.TenantName)?" "Yes, this is the person's laptop: leave $($live.TenantName)" -NoDefault)) { Write-Warn2 'Stopped. Nothing changed.'; return }
             }
             dsregcmd /leave | Out-Null
             Start-Sleep 5
@@ -824,7 +874,7 @@ About to leave $($state.OldTenantName). After this:
             if ($after.AzureAdJoined -eq 'YES') { throw 'dsregcmd /leave did not take. Run this stage from a local admin session (not the Entra user) and try again.' }
             Add-State 'Stage' 'Left'
             Write-Ok 'Left the old tenant. Restart now, sign in as the local admin, run this script again.'
-            if ((Read-Choice 'Restart now? (Y/N)' @('Y', 'N', 'y', 'n')) -in 'Y', 'y') { Restart-Computer -Force }
+            if (Confirm-Go 'Restart now?' 'Yes, restart') { Restart-Computer -Force }
         }
         return
     }
@@ -887,17 +937,21 @@ function Invoke-HandoverProfile {
     $state = Get-State
     $profiles = @(Get-Profiles)
     if (-not $OldProfile) { $OldProfile = $state.OldProfile }
-    if (-not $OldProfile) { $profiles | Format-Table Folder, Account, Created -AutoSize | Out-String -Width 200 | Write-Host; $OldProfile = Read-Host 'OLD profile folder name' }
-    $old = $profiles | Where-Object { $_.Folder -eq (Split-Path $OldProfile -Leaf) } | Select-Object -First 1
-    if (-not $old) { throw "Old profile '$OldProfile' not found." }
-    $new = if ($NewProfile) { $profiles | Where-Object { $_.Folder -eq (Split-Path $NewProfile -Leaf) } | Select-Object -First 1 }
-           else { $profiles | Where-Object { $_.Created -gt $old.Created -and $_.Account -like 'AzureAD\*' -and $_.Sid -ne $old.Sid } | Sort-Object Created | Select-Object -Last 1 }
-    if (-not $new) { throw 'No new Microsoft Entra profile found. The person must sign in once with the new account first.' }
+    if ($OldProfile) { $old = $profiles | Where-Object { $_.Folder -eq (Split-Path $OldProfile -Leaf) } | Select-Object -First 1 }
+    else { $old = Select-FromList 'Which is the OLD profile (the one with their files)?' @($profiles | Where-Object { $_.Folder -ne $LocalAdminName }) { param($x) '{0,-22} {1,-34} created {2}' -f $x.Folder, $x.Account, $x.Created } }
+    if (-not $old) { throw 'No old profile chosen.' }
+    if ($NewProfile) { $new = $profiles | Where-Object { $_.Folder -eq (Split-Path $NewProfile -Leaf) } | Select-Object -First 1 }
+    else {
+        $cands = @($profiles | Where-Object { $_.IsEntra -and $_.Sid -ne $old.Sid -and $_.Created -gt $old.Created -and $_.Folder -ne $LocalAdminName } | Sort-Object Created -Descending)
+        if (-not $cands) { throw 'No new Microsoft Entra profile found. The person must sign in once with the new account first, then sign out.' }
+        $new = Select-FromList "Which is the person's NEW account (their new email)? Not yours." $cands { param($x) '{0,-22} {1,-34} created {2}' -f $x.Folder, $x.Account, $x.Created }
+    }
+    if (-not $new) { Write-Warn2 'Stopped. Nothing changed.'; return }
     if ($new.Loaded -or $old.Loaded) { throw 'A profile is still loaded (someone is signed in). Sign them out and run from the local admin.' }
     Write-Host "Old: $($old.Path)  $($old.Account)  $($old.Sid)" -ForegroundColor Yellow
     Write-Host "New: $($new.Path)  $($new.Account)  $($new.Sid)" -ForegroundColor Green
     if (-not $PSCmdlet.ShouldProcess("$($new.Account)", "Point at $($old.Path) and take over its permissions")) { return }
-    if ((Read-Choice 'Type HANDOVER to continue, or N to stop' @('HANDOVER', 'N', 'n')) -ne 'HANDOVER') { return }
+    if (-not (Confirm-Go "Give $($new.Account) the files and settings in $($old.Path)?" 'Yes, hand it over' -NoDefault)) { Write-Warn2 'Stopped. Nothing changed.'; return }
 
     $plKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($new.Sid)"
     $parked = "$($new.Path).new"
@@ -975,7 +1029,7 @@ function Invoke-CleanupAdminPC {
     $items | ForEach-Object { Write-Host "  - $($_.What)" }
     Write-Host 'It does not touch: your .ppkg files, Microsoft Graph or other PowerShell modules, or anything in either tenant.' -ForegroundColor Gray
     if ($WhatIfPreference) { Write-Host 'WhatIf: nothing removed.' -ForegroundColor Yellow; return }
-    if ((Read-Choice 'Remove all of the above? (Y/N)' @('Y', 'N', 'y', 'n')) -notin 'Y', 'y') { return }
+    if (-not (Confirm-Go 'Remove all of the above?' 'Yes, remove them')) { return }
     foreach ($i in $items) {
         try { & $i.Do; Write-Ok "Removed: $($i.What)" } catch { Write-Warn2 "$($i.What): $($_.Exception.Message)" }
     }

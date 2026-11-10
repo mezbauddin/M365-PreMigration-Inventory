@@ -189,6 +189,8 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 ## Tips and traps
 
 - **The current ADK designer crashes from the command line.** ICD.exe in ADK 10.1.26100 and later is missing `Microsoft.Diagnostics.Tracing.EventSource.dll` (FileNotFoundException). Option 1 runs a private copy with that file added from its NuGet package (1.1.28).
+- **Entra profiles don't always show as `AzureAD\name`.** On current Windows they can show a tenant prefix (`CONTOSO\name`). Match them by SID instead: Entra user SIDs start `S-1-12-1-`.
+- **Over Quick Assist, typing is where mistakes happen.** Every choice in options 4 and 5 is a numbered list; irreversible steps need an explicit 1 (Enter alone does nothing).
 - **32-bit PowerShell can't see dsregcmd.** Some "Run as administrator" shortcuts open Windows PowerShell (x86). There `dsregcmd` is not found and BitLocker and registry calls are redirected. The script now relaunches itself in 64-bit; by hand, run `C:/Windows/Sysnative/WindowsPowerShell/v1.0/powershell.exe` first.
 - **The Windows sign-in broker can't get this token.** The first-party apps allowed to request a device registration token have no broker redirect URI, so WAM fails with AADSTS50011. Option 1 uses a sign-in window instead.
 - **Each bulk token request creates a `package_<guid>` account** in the destination, exactly as the designer does. Failed or repeated runs leave extra ones; delete the unused ones, never the one behind the package you are using (deleting it kills that package).
@@ -214,6 +216,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.4.0 | 2026-11-10 | Move-TenantDevices 1.2.0: pick by number instead of typing (profiles, package, confirmations); can generate the local admin password; package auto-found; Entra profiles detected by SID so option 5 works when Windows shows a tenant prefix instead of `AzureAD\`. |
 | 1.3.1 | 2026-11-10 | Move-TenantDevices 1.1.1: relaunches itself in 64-bit PowerShell when started from 32-bit (x86), where `dsregcmd` is not found. |
 | 1.3.0 | 2026-11-10 | Move-TenantDevices 1.1.0: option 7 cleans up the admin PC (designer copies, temp files, sign-in setting, build logs, and on confirmation Windows Configuration Designer and the ADK). Keeps .ppkg files. |
 | 1.2.10 | 2026-11-10 | Move-TenantDevices 1.0.10: package build uses absolute paths; the ADK designer (10.1.26100 and later ships without `Microsoft.Diagnostics.Tracing.EventSource.dll`) runs from a private patched copy. |
