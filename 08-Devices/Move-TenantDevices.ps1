@@ -43,6 +43,10 @@
     this machine's dsregcmd TenantId is different, it stops before changing anything. Strongly recommended for
     MoveDevice.
 
+.PARAMETER UseDeviceCode
+    Option 1 only: sign in with a device code instead of the interactive sign-in. Off by default, because many
+    tenants block device code flow with Conditional Access.
+
 .PARAMETER WorkFolder
     Where state, keys and reports go. Default C:\MigrationBackup (laptops) or .\DeviceMigration (admin PC).
 
@@ -59,7 +63,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.4
+    Version : 1.0.5
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -69,6 +73,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.5  2026-11-10  Option 1 signs in interactively (Windows sign-in broker, then system browser, then sign-in
+                         window) so MFA and Conditional Access apply. Device code only with -UseDeviceCode.
       1.0.4  2026-11-10  Option 1 builds the package with no clicks: real bulk token via bulkaadjtoken (the token
                          1.0.0-1.0.3 requested was an ordinary refresh token and would not have joined devices),
                          optional rename pattern, ICD run inside the Store app's package context, or the ADK
@@ -99,6 +105,7 @@ param(
     [string]$ExportFolder,
     [string]$GroupMappingFile,
     [string]$LocalAdminName = 'migadmin',
+    [switch]$UseDeviceCode,
     [switch]$Force
 )
 
@@ -212,22 +219,79 @@ function Install-Wcd {
     $w
 }
 
-function Get-BulkToken([string]$TenantId, [string]$Admin, [int]$Days, [string]$PackageName) {
-    # Same two calls Windows Configuration Designer makes behind "Get Bulk Token":
-    #  1. sign in (device code) for the device registration service
-    #  2. ask login.microsoftonline.com/webapp/bulkaadjtoken for a bulk token, which creates the package_<guid> account
-    $client = 'b90d5b8f-5503-4153-b545-b31cecfaece2'   # Windows Configuration Designer
-    $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
+function Get-DrsAccessToken([string]$TenantId, [string]$Admin) {
+    # Modern, interactive sign-in for the device registration service, so MFA and Conditional Access apply and
+    # tenants that block device code still work. Uses MSAL from the Microsoft.Graph.Authentication module.
+    # Tries, in order: the Windows sign-in broker (WAM), the system browser, then the embedded window
+    # (Windows PowerShell only). Each is a Microsoft first-party public client; which one a tenant accepts depends on
+    # its policies, so the script reports each attempt.
+    $drsScope = 'urn:ms-drs:enterpriseregistration.windows.net/.default'
+    if (-not ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'Microsoft.Identity.Client' -and $_.GetType('Microsoft.Identity.Client.PublicClientApplicationBuilder') })) {
+        $mod = Get-Module -ListAvailable Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $mod) { throw 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser first (it provides the Microsoft sign-in library).' }
+        $edition = if ($PSVersionTable.PSEdition -eq 'Core') { 'Core' } else { 'Desktop' }
+        $dlls = @(Get-ChildItem $mod.ModuleBase -Recurse -Filter 'Microsoft.Identity.Client*.dll' -ErrorAction SilentlyContinue)
+        $pick = { param($n) $c = @($dlls | Where-Object Name -eq $n); $e = @($c | Where-Object { $_.FullName -match "\\$edition\\" }); if ($e) { $e[0] } elseif ($c) { $c[0] } }
+        foreach ($n in 'Microsoft.IdentityModel.Abstractions.dll', 'Microsoft.Identity.Client.dll', 'Microsoft.Identity.Client.NativeInterop.dll', 'Microsoft.Identity.Client.Broker.dll', 'Microsoft.Identity.Client.Desktop.dll') {
+            $f = & $pick $n
+            if (-not $f -and $n -eq 'Microsoft.IdentityModel.Abstractions.dll') { $f = Get-ChildItem $mod.ModuleBase -Recurse -Filter $n -ErrorAction SilentlyContinue | Select-Object -First 1 }
+            if ($f) { try { Add-Type -Path $f.FullName -ErrorAction Stop } catch {} }
+        }
+    }
+    if (-not ('Win32Mig.Native' -as [type])) {
+        Add-Type -Namespace Win32Mig -Name Native -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();'
+    }
+    $hwnd = [Win32Mig.Native]::GetForegroundWindow(); if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32Mig.Native]::GetConsoleWindow() }
+    $authority = "https://login.microsoftonline.com/$TenantId"
+    $wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'      # Windows Configuration Designer
+    $aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'    # Azure AD PowerShell (legacy first-party client used for device registration tokens)
+    $attempts = @(
+        @{ Label = 'Windows sign-in broker (WAM)'; Client = $wcd; Mode = 'Broker' },
+        @{ Label = 'system browser'; Client = $wcd; Mode = 'Browser' },
+        @{ Label = 'system browser (device registration client)'; Client = $aadps; Mode = 'Browser' },
+        @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' }
+    )
+    foreach ($a in $attempts) {
+        if ($a.Mode -eq 'Embedded' -and $PSVersionTable.PSEdition -eq 'Core') { continue }
+        try {
+            Write-Host "Signing in with the $($a.Label)..." -ForegroundColor Cyan
+            $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority($authority)
+            switch ($a.Mode) {
+                'Broker' {
+                    $opt = [Microsoft.Identity.Client.BrokerOptions]::new([Microsoft.Identity.Client.BrokerOptions+OperatingSystems]::Windows)
+                    $b = [Microsoft.Identity.Client.Broker.BrokerExtension]::WithBroker($b, $opt)
+                }
+                'Browser'  { $b = $b.WithRedirectUri('http://localhost') }
+                'Embedded' { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
+            }
+            $app = $b.Build()
+            $req = $app.AcquireTokenInteractive([string[]]@($drsScope)).WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount).WithParentActivityOrWindow($hwnd)
+            if ($Admin) { $req = $req.WithLoginHint($Admin) }
+            if ($a.Mode -eq 'Embedded') { $req = $req.WithUseEmbeddedWebView($true) }
+            $res = $req.ExecuteAsync().GetAwaiter().GetResult()
+            if ($res.AccessToken) { Write-Ok "Signed in as $($res.Account.Username) ($($a.Label))"; return $res.AccessToken }
+        }
+        catch { Write-Warn2 "$($a.Label): $(($_.Exception.InnerException, $_.Exception | Where-Object { $_ } | Select-Object -First 1).Message)" }
+    }
+    throw 'No interactive sign-in method was accepted by this tenant.'
+}
+function Get-DrsAccessTokenDeviceCode([string]$TenantId, [string]$Admin) {
+    # Only with -UseDeviceCode: many tenants block device code flow by Conditional Access
+    $client = 'b90d5b8f-5503-4153-b545-b31cecfaece2'; $drs = 'urn:ms-drs:enterpriseregistration.windows.net'
     $dc = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/devicecode" -Body @{ client_id = $client; resource = $drs }
     Write-Host $dc.message -ForegroundColor Yellow
-    Write-Host "Sign in as $Admin. If asked whether to let your organisation manage this device, choose 'This app only'." -ForegroundColor Yellow
-    $at = $null; $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
-    while (-not $at -and (Get-Date) -lt $deadline) {
+    $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
+    while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds ([int]$dc.interval)
-        try { $at = (Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $client; code = $dc.device_code; resource = $drs }).access_token }
-        catch { $b = ''; try { $b = $_.ErrorDetails.Message } catch {}; if ($b -notmatch 'authorization_pending') { throw } }
+        try { $t = Invoke-RestMethod -Method Post "https://login.microsoftonline.com/$TenantId/oauth2/token" -Body @{ grant_type = 'device_code'; client_id = $client; code = $dc.device_code; resource = $drs }; if ($t.access_token) { return $t.access_token } }
+        catch { $bd = ''; try { $bd = $_.ErrorDetails.Message } catch {}; if ($bd -notmatch 'authorization_pending') { throw } }
     }
-    if (-not $at) { throw 'Sign-in timed out.' }
+    throw 'Sign-in timed out.'
+}
+function Get-BulkToken([string]$TenantId, [string]$Admin, [int]$Days, [string]$PackageName) {
+    # The same call Windows Configuration Designer makes behind "Get Bulk Token": it creates the package_<guid>
+    # account in the tenant and returns a bulk token that lets devices join without a user signing in.
+    $at = if ($UseDeviceCode) { Get-DrsAccessTokenDeviceCode $TenantId $Admin } else { Get-DrsAccessToken $TenantId $Admin }
     $h = @{ Authorization = "Bearer $at" }
     $pid0 = [guid]::NewGuid().ToString()
     $body = @{ pid = $pid0; name = "package_$pid0"; exp = (Get-Date).AddDays($Days).ToString('MM/dd/yyyy') } | ConvertTo-Json
