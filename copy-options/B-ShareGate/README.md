@@ -8,7 +8,7 @@
 | Version | 2.0.0 |
 | Tested | Production, on a small business tenant: mailboxes with large archives, SharePoint, Teams and OneDrive |
 | Tool version | ShareGate Migrate 26.11 |
-| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0 |
+| Script | [`Copy-DrivesWithShareGate.ps1`](Copy-DrivesWithShareGate.ps1) 1.1.0, [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) 1.0.0 |
 | Licence | MIT (this page and script; ShareGate itself is a paid product) |
 
 Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration toolkit](../../README.md). Not sponsored. I chose it because it fit the job.
@@ -18,6 +18,7 @@ Part of the [copy options](../README.md) in my [M365 tenant-to-tenant migration 
 | Version | Date | Change |
 | --- | --- | --- |
 | 2.0.0 | 2026-11-10 | Adds what happens without it, three ways and a tips and traps summary. Live-job specifics replaced with generic wording; the lessons are unchanged |
+| 1.2.0 | 2026-11-10 | `Copy-PeopleOneDrives.ps1` 1.0.0: people's OneDrives end to end (finds real URLs by owner in both tenants, creates missing destination OneDrives, adds you as admin, runs the copy) |
 | 1.1.0 | 2026-11-10 | `Copy-DrivesWithShareGate.ps1` 1.1.0 leaves out rows marked Skip by `New-DriveCopyList.ps1` |
 | 1.0.0 | 2026-11-09 | First version, written up from a live migration |
 
@@ -117,6 +118,19 @@ foreach ($r in $rows) {
 - Create the destination OneDrives first ([04](../../04-TargetOneDrives/)). ShareGate can't copy into one that doesn't exist.
 - Copy **after** sign-in names are final, because the OneDrive URL follows the sign-in name ([07](../../07-DomainCutover/)).
 - Leavers have no destination OneDrive. Copy theirs into a library on a SharePoint site, one folder per person.
+
+### People's OneDrives after cutover: `Copy-PeopleOneDrives.ps1`
+
+After a cutover, both tenants rename OneDrive URLs in the background, so a guessed URL fails with **CO-001-032** ("The connection to the SharePoint site failed"). Destination OneDrives may not exist yet, and you need site admin on every one. [`Copy-PeopleOneDrives.ps1`](Copy-PeopleOneDrives.ps1) takes user names and your mapping, finds each OneDrive **by owner** in both tenants, skips people who never used OneDrive (nothing to copy), creates missing destination OneDrives, adds you as admin, then runs `Copy-DrivesWithShareGate.ps1`.
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\Copy-PeopleOneDrives.ps1 -MappingFile .\Mapping-PostCutover\UserMapping.csv `
+    -Users kim, lee, sam -SourceAdminUrl https://fabrikam-admin.sharepoint.com -SourceAdmin admin@fabrikam.onmicrosoft.com `
+    -DestinationAdminUrl https://contoso-admin.sharepoint.com -DestinationAdmin admin@contoso.com -SgumFile .\Mapping-PostCutover\UserMapping.sgum
+```
+
+- **Trap:** a person with no source OneDrive never used it. There is nothing to copy; their new OneDrive is created when they first sign in.
+- **Tip:** with Files On-Demand, most of a person's files exist only in the cloud. Copy their OneDrive **before** you move their laptop, or they sign in to empty folders.
 
 ### Many OneDrives at once: `Copy-DrivesWithShareGate.ps1`
 
