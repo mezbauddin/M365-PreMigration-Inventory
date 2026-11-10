@@ -58,6 +58,36 @@ Needs `Microsoft.Graph.Authentication`, the Graph scopes `BitLockerKey.Read.All`
 
 **Trap:** that CSV opens every disk in the company. Move it into your password manager or an encrypted store the business controls, and delete the local copy. Every key read is audited in Entra ID, so tell the security team before you run it.
 
+### Move-TenantDevices.ps1 (start here)
+
+One interactive script for the whole device side. Run it with no parameters and pick from the menu. Options 1 to 3 run on your admin PC; 4 to 6 run on each laptop as administrator. Every step that changes a tenant has `-WhatIf`, and nothing is ever wiped, retired or reset.
+
+| Option | Where | What it does |
+|---|---|---|
+| 1 Build the enrolment package | Admin PC | Signs in to the destination, gets a bulk enrolment token and builds a `.ppkg` that joins laptops silently. One per tenant, valid up to 180 days. Falls back to guiding you through Windows Configuration Designer |
+| 2 Copy Intune configuration | Admin PC | Exports device configuration, settings catalog, compliance, scripts, remediations, Autopilot profiles and app metadata from the source; imports into the destination; maps group assignments by name; skips anything with the same name already there |
+| 3 Autopilot | Laptop then admin PC | Capture the hardware hash on the laptop; register captured hashes in the destination and remove them from the source |
+| 4 Move this laptop | Laptop | Staged, with the stage saved in `C:\MigrationBackup\state.json`. Stage 1: pre-flight, BitLocker key, printers, Autopilot hash, local admin, leave the old tenant. Stage 2 (after a restart as the local admin): install the package, join. Stage 3: the person signs in once |
+| 5 Hand the old profile over | Laptop | Points the person's new account at their old profile folder, fixes ownership and permissions (files and registry hives), parks the empty new profile. Verifies, and rolls back on any failure |
+| 6 Copy profile data instead | Laptop | Fallback: `Copy-ProfileData.ps1` |
+
+```powershell
+# Admin PC, once per destination
+.\Move-TenantDevices.ps1                      # 1, then 2 (with -WhatIf first), then 3 > move
+
+# Each laptop, as administrator, re-run after each restart until it says Done
+.\Move-TenantDevices.ps1 -Action MoveDevice -PackagePath C:\MigrationBackup\contoso-join.ppkg
+```
+
+**What the person sees:** their laptop restarts twice, they sign in once with their new email and password, you run option 5, and their next sign-in has their desktop, files, settings and apps exactly as they were. OneDrive, Outlook and Teams ask for the new sign-in once. Saved browser passwords and Windows Hello are tied to the old account and need setting up again.
+
+- **Tip:** do one willing person first, end to end, before the rest.
+- **Tip:** option 2 finds nothing in a tenant that never used Intune. That's fine; the laptops still enrol in the destination's Intune automatically on join (MDM enrolment scope).
+- **Trap:** the bulk token request in option 1 uses the same undocumented sign-in flow as Windows Configuration Designer. If Microsoft changes it, the script opens WCD and tells you what to click. Either way you end up with a `.ppkg`.
+- **Trap:** the `.ppkg` joins any device to the tenant. Keep it off shared drives and delete it when the move is done.
+- **Trap:** run stages 2 and 5 from the local admin, never from the person's account. A loaded profile can't be handed over.
+- **Three ways:** ForensiT User Profile Wizard (paid, polished, does the handover for you), this script (free, same handover technique), or by hand (leave, join, copy the files with Explorer and lose the settings).
+
 ### Copy-ProfileData.ps1
 
 Runs **on the laptop**, elevated. `-Prepare` before it leaves the old tenant saves the BitLocker key, join status, printers and profile list to `C:\MigrationBackup`. After the person has signed in once with their new account, the default mode copies Desktop, Documents, Downloads, Pictures, Videos, Music, Favorites, the old OneDrive folder(s), Outlook signatures and PST files, Sticky Notes and Edge/Chrome bookmarks from the old profile into the new one. The old profile is never changed, so it's your fallback.
@@ -165,5 +195,6 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.0 | 2026-11-10 | Added `Move-TenantDevices.ps1`: one menu for package, Intune copy, Autopilot, staged device move and profile handover |
 | 1.1.0 | 2026-11-10 | Added `Copy-ProfileData.ps1`: pre-move snapshot and old-to-new profile copy on the laptop |
 | 1.0.0 | 2026-11-10 | First release of the scripts: `Get-DeviceInventory.ps1` and `Export-BitLockerKeys.ps1`. Printable per-device checklist, timings, three ways. Replaces the planning page |
