@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.2
+    Version : 1.2.3
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,9 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.3  2026-11-10  Option 5: icacls 'Access is denied' on legacy junctions no longer aborts the handover under
+                         Windows PowerShell; ownership verified instead. If a profile is still open, offers a restart.
+                         New -Action Update (menu 8) pulls the latest version.
       1.2.2  2026-11-10  Option 5 clears the old tenant's cached sign-ins in the handed-over profile (sign-in broker, Office
                          identities, Teams cache), renamed or exported first so it can be undone.
       1.2.1  2026-11-10  Stage 2 finds the .ppkg in the work folder if it was copied in after stage 1. Generated local
@@ -134,7 +137,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile', 'CleanupAdminPC')]
+    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile', 'CleanupAdminPC', 'Update')]
     [string]$Action = 'Menu',
     [string]$WorkFolder,
     [string]$PackagePath,
@@ -999,7 +1002,13 @@ function Invoke-HandoverProfile {
         $new = Select-FromList "Which is the person's NEW account (their new email)? Not yours." $cands { param($x) '{0,-22} {1,-34} created {2}' -f $x.Folder, $x.Account, $x.Created }
     }
     if (-not $new) { Write-Warn2 'Stopped. Nothing changed.'; return }
-    if ($new.Loaded -or $old.Loaded) { throw 'A profile is still loaded (someone is signed in). Sign them out and run from the local admin.' }
+    if ($new.Loaded -or $old.Loaded) {
+        $busy = @($old, $new | Where-Object Loaded | ForEach-Object { $_.Folder }) -join ', '
+        Write-Warn2 "Windows still has $busy open (someone is signed in, used Switch user, or Windows has not let go of it yet)."
+        Write-Host 'Fix: restart, sign in as .\' -NoNewline -ForegroundColor Yellow; Write-Host "$LocalAdminName ONLY (the person must not sign in first), run this again." -ForegroundColor Yellow
+        if (Confirm-Go 'Restart now?' 'Yes, restart now') { Restart-Computer -Force }
+        return
+    }
     Write-Host "Old: $($old.Path)  $($old.Account)  $($old.Sid)" -ForegroundColor Yellow
     Write-Host "New: $($new.Path)  $($new.Account)  $($new.Sid)" -ForegroundColor Green
     if (-not $PSCmdlet.ShouldProcess("$($new.Account)", "Point at $($old.Path) and take over its permissions")) { return }
@@ -1015,8 +1024,18 @@ function Invoke-HandoverProfile {
         "ProfileImagePath for $($new.Sid) -> $($old.Path); new folder parked as $parked" | Add-Content $log
         # 2. File permissions: new SID becomes owner with full control, old SID stays (harmless)
         $sidRef = "*$($new.Sid)"
-        icacls "$($old.Path)" /setowner "$sidRef" /T /C /Q 2>&1 | Add-Content $log
-        icacls "$($old.Path)" /grant "${sidRef}:(OI)(CI)F" /T /C /Q 2>&1 | Add-Content $log
+        # icacls reports "Access is denied" for the legacy junctions every profile has (Application Data, Cookies...).
+        # Expected and harmless. Windows PowerShell turns native stderr into terminating errors under 'Stop', so relax it here.
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try {
+            icacls "$($old.Path)" /setowner "$sidRef" /T /C /Q 2>&1 | ForEach-Object { "$_" } | Add-Content $log -WhatIf:$false
+            icacls "$($old.Path)" /grant "${sidRef}:(OI)(CI)F" /T /C /Q 2>&1 | ForEach-Object { "$_" } | Add-Content $log -WhatIf:$false
+        }
+        finally { $ErrorActionPreference = $eap }
+        # The folder itself must now belong to the new account; anything inside that was skipped is logged
+        $owner = (Get-Acl $old.Path).Owner
+        $ownerSid = try { ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch { $owner }
+        if ($ownerSid -ne $new.Sid) { throw "Ownership did not change on $($old.Path) (owner is $owner). See $log" }
         # 3. Registry hives inside the profile
         Grant-HiveAccess (Join-Path $old.Path 'NTUSER.DAT') $new.Sid
         $usr = Join-Path $old.Path 'AppData\Local\Microsoft\Windows\UsrClass.dat'
@@ -1068,6 +1087,20 @@ function Invoke-CopyProfile {
     if (-not $WhatIfPreference) { Add-State 'Stage' 'Done'; Invoke-BitLockerBackup }
 }
 
+# ---------------------------------------------------------------- update
+function Invoke-SelfUpdate {
+    # Short to type on any machine: .\Move-TenantDevices.ps1 -Action Update
+    $here = Split-Path $PSCommandPath
+    foreach ($n in 'Move-TenantDevices.ps1', 'Copy-ProfileData.ps1') {
+        $tmp = Join-Path $here "$n.new"
+        Invoke-WebRequest "$script:Repo/$n`?nocache=$(Get-Random)" -OutFile $tmp -UseBasicParsing -Headers @{ 'Cache-Control' = 'no-cache' }
+        Move-Item $tmp (Join-Path $here $n) -Force -WhatIf:$false
+        Unblock-File (Join-Path $here $n) -ErrorAction SilentlyContinue
+    }
+    $v = (Select-String 'Version : ' (Join-Path $here 'Move-TenantDevices.ps1') | Select-Object -First 1).Line.Trim()
+    Write-Ok "Updated. $v"
+}
+
 # ---------------------------------------------------------------- 7. clean up the admin PC
 function Invoke-CleanupAdminPC {
     Write-Step 'Clean up this admin PC (what option 1 installed or left behind)'
@@ -1114,9 +1147,10 @@ if ($Action -eq 'Menu') {
    6  Copy profile data into the new profile instead (fallback)
   Admin PC, when you are finished
    7  Clean up this admin PC (removes what option 1 installed)
+   8  Update this script to the latest version
    0  Exit
 "@ -ForegroundColor Cyan
-    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6', '7')) {
+    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6', '7', '8')) {
         '1' { $Action = 'BuildPackage' }
         '2' { $Action = 'CopyIntune' }
         '3' { $Action = if ((Read-Choice 'Capture this device (C) or move captured hashes between tenants (M)?' @('C', 'M', 'c', 'm')) -in 'C', 'c') { 'AutopilotCapture' } else { 'AutopilotMove' } }
@@ -1124,6 +1158,7 @@ if ($Action -eq 'Menu') {
         '5' { $Action = 'HandoverProfile' }
         '6' { $Action = 'CopyProfile' }
         '7' { $Action = 'CleanupAdminPC' }
+        '8' { $Action = 'Update' }
         default { return }
     }
 }
@@ -1136,4 +1171,5 @@ switch ($Action) {
     'HandoverProfile'  { Invoke-HandoverProfile }
     'CopyProfile'      { Invoke-CopyProfile }
     'CleanupAdminPC'   { Invoke-CleanupAdminPC }
+    'Update'           { Invoke-SelfUpdate }
 }
