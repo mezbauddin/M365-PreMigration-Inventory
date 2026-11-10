@@ -67,7 +67,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.0.6
+    Version : 1.0.7
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -77,6 +77,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.0.7  2026-11-10  Option 1 sign-in runs in a clean child PowerShell, so it works when Microsoft Graph is already
+                         loaded in the session (its sign-in library is otherwise out of reach).
       1.0.6  2026-11-10  Option 1 is no-touch: builds with the ADK designer or a copy of the Store designer run from the
                          command line, installs the ADK designer silently if needed, reports exit codes and never opens
                          the wizard unless -AllowWizard.
@@ -230,58 +232,70 @@ function Install-Wcd {
 function Get-DrsAccessToken([string]$TenantId, [string]$Admin) {
     # Modern, interactive sign-in for the device registration service, so MFA and Conditional Access apply and
     # tenants that block device code still work. Uses MSAL from the Microsoft.Graph.Authentication module.
-    # Tries, in order: the Windows sign-in broker (WAM), the system browser, then the embedded window
-    # (Windows PowerShell only). Each is a Microsoft first-party public client; which one a tenant accepts depends on
-    # its policies, so the script reports each attempt.
-    $drsScope = 'urn:ms-drs:enterpriseregistration.windows.net/.default'
-    if (-not ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'Microsoft.Identity.Client' -and $_.GetType('Microsoft.Identity.Client.PublicClientApplicationBuilder') })) {
-        $mod = Get-Module -ListAvailable Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $mod) { throw 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser first (it provides the Microsoft sign-in library).' }
-        $edition = if ($PSVersionTable.PSEdition -eq 'Core') { 'Core' } else { 'Desktop' }
-        $dlls = @(Get-ChildItem $mod.ModuleBase -Recurse -Filter 'Microsoft.Identity.Client*.dll' -ErrorAction SilentlyContinue)
-        $pick = { param($n) $c = @($dlls | Where-Object Name -eq $n); $e = @($c | Where-Object { $_.FullName -match "\\$edition\\" }); if ($e) { $e[0] } elseif ($c) { $c[0] } }
-        foreach ($n in 'Microsoft.IdentityModel.Abstractions.dll', 'Microsoft.Identity.Client.dll', 'Microsoft.Identity.Client.NativeInterop.dll', 'Microsoft.Identity.Client.Broker.dll', 'Microsoft.Identity.Client.Desktop.dll') {
-            $f = & $pick $n
-            if (-not $f -and $n -eq 'Microsoft.IdentityModel.Abstractions.dll') { $f = Get-ChildItem $mod.ModuleBase -Recurse -Filter $n -ErrorAction SilentlyContinue | Select-Object -First 1 }
-            if ($f) { try { Add-Type -Path $f.FullName -ErrorAction Stop } catch {} }
+    # Runs in a clean child PowerShell (-NoProfile): once Microsoft Graph is imported, its copy of MSAL sits in a
+    # private load context that the session can't use, and loading a second copy beside it fails.
+    # Tries, in order: the Windows sign-in broker (WAM), the system browser, then the sign-in window (Windows PowerShell).
+    $mod = Get-Module -ListAvailable Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $mod) { throw 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser first (it provides the Microsoft sign-in library).' }
+    $tmpDir = Join-Path $env:LOCALAPPDATA 'MigrationToolkit'; New-Item -ItemType Directory -Path $tmpDir -Force -WhatIf:$false | Out-Null
+    $tokFile = Join-Path $tmpDir "drs-$([guid]::NewGuid()).tmp"
+    $child = @'
+$ErrorActionPreference = 'Stop'
+$TenantId = '__TENANT__'; $Admin = '__ADMIN__'; $ModBase = '__MODBASE__'; $TokFile = '__TOKFILE__'
+$edition = if ($PSVersionTable.PSEdition -eq 'Core') { 'Core' } else { 'Desktop' }
+$dlls = @(Get-ChildItem $ModBase -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Microsoft.Identity*' -or $_.Name -like 'Microsoft.IdentityModel.Abstractions*' })
+foreach ($n in 'Microsoft.IdentityModel.Abstractions.dll', 'Microsoft.Identity.Client.dll', 'Microsoft.Identity.Client.NativeInterop.dll', 'Microsoft.Identity.Client.Broker.dll', 'Microsoft.Identity.Client.Desktop.dll') {
+    $c = @($dlls | Where-Object Name -eq $n); $e = @($c | Where-Object { $_.FullName -match "\\$edition\\" })
+    $f = if ($e) { $e[0] } elseif ($c) { $c[0] } else { $null }
+    if ($f) { try { Add-Type -Path $f.FullName } catch { if ($n -eq 'Microsoft.Identity.Client.dll') { Write-Host "   WARN load $n : $($_.Exception.Message)" -ForegroundColor Yellow } } }
+}
+if (-not ('Microsoft.Identity.Client.PublicClientApplicationBuilder' -as [type])) { Write-Host '   WARN The Microsoft sign-in library (MSAL) could not be loaded.' -ForegroundColor Yellow; exit 2 }
+if (-not ('Win32Mig.Native' -as [type])) { Add-Type -Namespace Win32Mig -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();' }
+$hwnd = [Win32Mig.Native]::GetConsoleWindow(); if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32Mig.Native]::GetForegroundWindow() }
+$scope = [string[]]@('urn:ms-drs:enterpriseregistration.windows.net/.default')
+$wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'; $aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'
+$attempts = @(
+    @{ Label = 'Windows sign-in broker (WAM)'; Client = $wcd; Mode = 'Broker' },
+    @{ Label = 'Windows sign-in broker (device registration client)'; Client = $aadps; Mode = 'Broker' },
+    @{ Label = 'system browser'; Client = $wcd; Mode = 'Browser' },
+    @{ Label = 'system browser (device registration client)'; Client = $aadps; Mode = 'Browser' },
+    @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' }
+)
+foreach ($a in $attempts) {
+    if ($a.Mode -eq 'Embedded' -and $edition -eq 'Core') { continue }
+    try {
+        Write-Host "Signing in with the $($a.Label)..." -ForegroundColor Cyan
+        $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority("https://login.microsoftonline.com/$TenantId")
+        switch ($a.Mode) {
+            'Broker'   { if (-not ('Microsoft.Identity.Client.Broker.BrokerExtension' -as [type])) { throw 'broker library not available' }
+                         $opt = [Microsoft.Identity.Client.BrokerOptions]::new([Microsoft.Identity.Client.BrokerOptions+OperatingSystems]::Windows)
+                         $b = [Microsoft.Identity.Client.Broker.BrokerExtension]::WithBroker($b, $opt) }
+            'Browser'  { $b = $b.WithRedirectUri('http://localhost') }
+            'Embedded' { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
+        }
+        $req = $b.Build().AcquireTokenInteractive($scope).WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount).WithParentActivityOrWindow($hwnd)
+        if ($Admin) { $req = $req.WithLoginHint($Admin) }
+        if ($a.Mode -eq 'Embedded') { $req = $req.WithUseEmbeddedWebView($true) }
+        $res = $req.ExecuteAsync().GetAwaiter().GetResult()
+        if ($res.AccessToken) {
+            [IO.File]::WriteAllText($TokFile, $res.AccessToken)
+            Write-Host "   OK   Signed in as $($res.Account.Username) ($($a.Label))" -ForegroundColor Green
+            exit 0
         }
     }
-    if (-not ('Win32Mig.Native' -as [type])) {
-        Add-Type -Namespace Win32Mig -Name Native -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();'
+    catch { $x = $_.Exception; while ($x.InnerException) { $x = $x.InnerException }; Write-Host "   WARN $($a.Label): $($x.Message)" -ForegroundColor Yellow }
+}
+exit 1
+'@
+    $child = $child.Replace('__TENANT__', $TenantId).Replace('__ADMIN__', ($Admin -replace "'", "''")).Replace('__MODBASE__', ($mod.ModuleBase -replace "'", "''")).Replace('__TOKFILE__', ($tokFile -replace "'", "''"))
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
+    $exe = (Get-Process -Id $PID).Path
+    try {
+        & $exe -NoProfile -NonInteractive -EncodedCommand $enc | Out-Host
+        if (Test-Path $tokFile) { return (Get-Content $tokFile -Raw).Trim() }
     }
-    $hwnd = [Win32Mig.Native]::GetForegroundWindow(); if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32Mig.Native]::GetConsoleWindow() }
-    $authority = "https://login.microsoftonline.com/$TenantId"
-    $wcd = 'b90d5b8f-5503-4153-b545-b31cecfaece2'      # Windows Configuration Designer
-    $aadps = '1b730954-1685-4b74-9bfd-dac224a7b894'    # Azure AD PowerShell (legacy first-party client used for device registration tokens)
-    $attempts = @(
-        @{ Label = 'Windows sign-in broker (WAM)'; Client = $wcd; Mode = 'Broker' },
-        @{ Label = 'system browser'; Client = $wcd; Mode = 'Browser' },
-        @{ Label = 'system browser (device registration client)'; Client = $aadps; Mode = 'Browser' },
-        @{ Label = 'sign-in window'; Client = $aadps; Mode = 'Embedded' }
-    )
-    foreach ($a in $attempts) {
-        if ($a.Mode -eq 'Embedded' -and $PSVersionTable.PSEdition -eq 'Core') { continue }
-        try {
-            Write-Host "Signing in with the $($a.Label)..." -ForegroundColor Cyan
-            $b = [Microsoft.Identity.Client.PublicClientApplicationBuilder]::Create($a.Client).WithAuthority($authority)
-            switch ($a.Mode) {
-                'Broker' {
-                    $opt = [Microsoft.Identity.Client.BrokerOptions]::new([Microsoft.Identity.Client.BrokerOptions+OperatingSystems]::Windows)
-                    $b = [Microsoft.Identity.Client.Broker.BrokerExtension]::WithBroker($b, $opt)
-                }
-                'Browser'  { $b = $b.WithRedirectUri('http://localhost') }
-                'Embedded' { $b = $b.WithRedirectUri('urn:ietf:wg:oauth:2.0:oob') }
-            }
-            $app = $b.Build()
-            $req = $app.AcquireTokenInteractive([string[]]@($drsScope)).WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount).WithParentActivityOrWindow($hwnd)
-            if ($Admin) { $req = $req.WithLoginHint($Admin) }
-            if ($a.Mode -eq 'Embedded') { $req = $req.WithUseEmbeddedWebView($true) }
-            $res = $req.ExecuteAsync().GetAwaiter().GetResult()
-            if ($res.AccessToken) { Write-Ok "Signed in as $($res.Account.Username) ($($a.Label))"; return $res.AccessToken }
-        }
-        catch { Write-Warn2 "$($a.Label): $(($_.Exception.InnerException, $_.Exception | Where-Object { $_ } | Select-Object -First 1).Message)" }
-    }
-    throw 'No interactive sign-in method was accepted by this tenant.'
+    finally { Remove-Item $tokFile -Force -ErrorAction SilentlyContinue }
+    throw 'No interactive sign-in method was accepted (see the warnings above).'
 }
 function Get-DrsAccessTokenDeviceCode([string]$TenantId, [string]$Admin) {
     # Only with -UseDeviceCode: many tenants block device code flow by Conditional Access
