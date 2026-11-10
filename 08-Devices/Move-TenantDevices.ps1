@@ -83,7 +83,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.2.0
+    Version : 1.2.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +93,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.2.1  2026-11-10  Stage 2 finds the .ppkg in the work folder if it was copied in after stage 1. Generated local
+                         admin password is short and easy to type on a call (Move1234!): the account is temporary.
       1.2.0  2026-11-10  Pick by number instead of typing: profiles, package, local admin password (can generate one),
                          leave / handover / restart confirmations. Entra profiles found by SID (S-1-12-1-*), so option 5
                          works when Windows shows a tenant prefix instead of AzureAD\. Package auto-found in the work folder.
@@ -259,10 +261,10 @@ function Confirm-Go([string]$Title, [string]$GoLabel = 'Yes, go ahead', [switch]
     $r = Select-FromList $Title @($GoLabel) { param($x) $x } -NoDefault:$NoDefault
     [bool]$r
 }
-function New-StrongPassword {
-    $chars = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%*@'
-    $bytes = New-Object byte[] 20; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+function New-EasyPassword {
+    # Easy to read out and type on a call (e.g. Move4821!). Meets Windows complexity rules. The account is
+    # temporary: delete it once the move is done (or let LAPS manage it).
+    'Move{0}!' -f (Get-Random -Minimum 1000 -Maximum 9999)
 }
 function Read-Choice($prompt, $options) {
     while ($true) { $a = Read-Host $prompt; if ($options -contains $a) { return $a }; Write-Host "Type one of: $($options -join ', ')" -ForegroundColor Yellow }
@@ -810,12 +812,12 @@ function Invoke-MoveDevice {
 
         if (-not (Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue)) {
             if ($PSCmdlet.ShouldProcess("Local admin '$LocalAdminName'", 'Create')) {
-                $how = Select-FromList "Password for the local admin '$LocalAdminName'" @('Make a strong one for me (shown once)', 'I will type my own') { param($x) $x }
+                $how = Select-FromList "Password for the local admin '$LocalAdminName'" @('Make an easy one for me, like Move4821! (shown once)', 'I will type my own') { param($x) $x }
                 if (-not $how) { Write-Warn2 'Stopped. Nothing changed.'; return }
                 if ($how -like 'Make*') {
-                    $plain = New-StrongPassword
+                    $plain = New-EasyPassword
                     Write-Host "`n   $LocalAdminName password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
-                    Write-Host '   Save it in your password manager now (select it and right-click to copy). It is not stored anywhere.' -ForegroundColor Yellow
+                    Write-Host '   Write it down or save it now. It is not stored anywhere. Delete this account when the move is done.' -ForegroundColor Yellow
                     if (-not (Confirm-Go 'Saved it?' 'Yes, saved' -NoDefault)) { Write-Warn2 'Stopped. Nothing changed.'; return }
                     $pw = ConvertTo-SecureString $plain -AsPlainText -Force; $plain = $null
                 } else { $pw = Read-Host "Type the password for '$LocalAdminName'" -AsSecureString }
@@ -884,6 +886,13 @@ About to leave $($state.OldTenantName). After this:
         if ($ds.AzureAdJoined -eq 'YES') { Add-State 'Stage' 'Joined'; $state = Get-State }
         else {
             $pkg = if ($PackagePath) { $PackagePath } else { $state.Package }
+            if (-not $pkg -or -not (Test-Path $pkg)) {
+                # Not recorded at stage 1 (copied in later): look in the work folder and next to the script
+                $found = @(Get-ChildItem $WorkFolder, $PSScriptRoot -Filter *.ppkg -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Unique)
+                $pick = Select-FromList 'Which enrolment package joins this laptop to the new tenant?' $found { param($x) '{0}   ({1})' -f $x.Name, $x.LastWriteTime }
+                $pkg = if ($pick) { $pick.FullName } else { $null }
+                if (-not $found) { Write-Warn2 "No .ppkg in $WorkFolder. Copy it there and run again, or join by hand (below)." }
+            }
             if ($pkg -and (Test-Path $pkg)) {
                 if ($PSCmdlet.ShouldProcess("This laptop", "Join the new tenant with $pkg")) {
                     Import-Module Provisioning -ErrorAction Stop

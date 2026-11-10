@@ -216,6 +216,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.4.1 | 2026-11-10 | Move-TenantDevices 1.2.1: stage 2 finds the `.ppkg` if it was copied in after stage 1; the generated local admin password is short and easy to type (`Move1234!`) because the account is temporary. |
 | 1.4.0 | 2026-11-10 | Move-TenantDevices 1.2.0: pick by number instead of typing (profiles, package, confirmations); can generate the local admin password; package auto-found; Entra profiles detected by SID so option 5 works when Windows shows a tenant prefix instead of `AzureAD\`. |
 | 1.3.1 | 2026-11-10 | Move-TenantDevices 1.1.1: relaunches itself in 64-bit PowerShell when started from 32-bit (x86), where `dsregcmd` is not found. |
 | 1.3.0 | 2026-11-10 | Move-TenantDevices 1.1.0: option 7 cleans up the admin PC (designer copies, temp files, sign-in setting, build logs, and on confirmation Windows Configuration Designer and the ADK). Keeps .ppkg files. |
