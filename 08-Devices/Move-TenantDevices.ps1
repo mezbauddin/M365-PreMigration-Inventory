@@ -98,7 +98,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.4.5
+    Version : 1.4.6
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -108,6 +108,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.6  2026-11-11  Option 9 also moves a stand-alone PC (local Windows account, not joined): skips the leave,
+                         joins, copies the local profile into the new work account at first sign-in.
       1.4.5  2026-11-11  -LocalAdminPassword: same safety-net password on every laptop. Password shown again before
                          the restart.
       1.4.4  2026-11-11  Repo drop: enrolment.ppkg at the top level or in temp/.
@@ -1037,10 +1039,15 @@ function Invoke-MoveInOneGo {
     }
     $ds = Get-DsregStatus
     Write-Step 'Move this laptop in one go'
-    if ($ds.DomainJoined -eq 'YES') { throw 'This PC is joined to an on-premises domain. This script is for Microsoft Entra joined devices only.' }
-    if ($ds.AzureAdJoined -ne 'YES') { throw 'This PC is not Microsoft Entra joined. Nothing to leave.' }
-    Write-Ok "Joined to $($ds.TenantName)"
-    if ($SourceTenantId -and $ds.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) { throw "STOP: joined to $($ds.TenantName), not the source tenant $SourceTenantId. Nothing changed." }
+    if ($ds.DomainJoined -eq 'YES') { throw 'This PC is joined to an on-premises domain. This script is for Microsoft Entra joined or stand-alone PCs only.' }
+    # A stand-alone PC (local Windows account, not joined anywhere) has nothing to leave: it just joins, and the
+    # person's local profile is copied into their new work account at first sign-in, exactly like a moved laptop.
+    $standalone = $ds.AzureAdJoined -ne 'YES'
+    if ($standalone) { Write-Ok 'Not joined to any organisation (local Windows account). Nothing to leave: it will just join.' }
+    else {
+        Write-Ok "Joined to $($ds.TenantName)"
+        if ($SourceTenantId -and $ds.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) { throw "STOP: joined to $($ds.TenantName), not the source tenant $SourceTenantId. Nothing changed." }
+    }
     $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1); if ($free -lt 5) { Write-Warn2 "Only $free GB free on C:" }
 
     # Whose laptop: default is the person signed in at the screen (not the admin who elevated this window)
@@ -1091,7 +1098,7 @@ function Invoke-MoveInOneGo {
 
    Computer : $env:COMPUTERNAME
    Person   : $($old.Account)  ($($old.Path))
-   Leaves   : $($ds.TenantName)
+   Leaves   : $(if ($standalone) { '(nothing: not joined anywhere)' } else { $ds.TenantName })
    Joins    : the tenant in $($pkg.Name)
    Then     : restarts. The person signs in with their NEW email; their files are copied in automatically.
 "@ -ForegroundColor Cyan
@@ -1100,13 +1107,15 @@ function Invoke-MoveInOneGo {
     Set-State ([pscustomobject]@{ Stage = 'Prepared'; Mode = 'OneGo'; OldProfile = $old.Folder; OldSid = $old.Sid; OldPath = $old.Path; OldTenantId = $ds.TenantId; OldTenantName = $ds.TenantName; OldDeviceId = $ds.DeviceId; Snapshot = $snap; LocalAdmin = $LocalAdminName; Package = $pkg.FullName })
     Register-AutoCopyTask
 
-    $live = Get-DsregStatus
-    if ($live.TenantId -ne $ds.TenantId) { throw 'The join state changed while this ran. Nothing left; check dsregcmd /status.' }
-    dsregcmd /leave | Out-Null
-    Start-Sleep 5
-    if ((Get-DsregStatus).AzureAdJoined -eq 'YES') { throw 'dsregcmd /leave did not take. Nothing else changed. Try again from Terminal (Admin).' }
+    if (-not $standalone) {
+        $live = Get-DsregStatus
+        if ($live.TenantId -ne $ds.TenantId) { throw 'The join state changed while this ran. Nothing left; check dsregcmd /status.' }
+        dsregcmd /leave | Out-Null
+        Start-Sleep 5
+        if ((Get-DsregStatus).AzureAdJoined -eq 'YES') { throw 'dsregcmd /leave did not take. Nothing else changed. Try again from Terminal (Admin).' }
+        Write-Ok "Left $($ds.TenantName)"
+    }
     Add-State 'Stage' 'Left'
-    Write-Ok "Left $($ds.TenantName)"
 
     Import-Module Provisioning -ErrorAction Stop
     try { Install-ProvisioningPackage -PackagePath $pkg.FullName -QuietInstall -ForceInstall | Out-Null } catch { Write-Warn2 "Package install reported: $($_.Exception.Message)" }

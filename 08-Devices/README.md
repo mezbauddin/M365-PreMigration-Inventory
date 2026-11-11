@@ -225,6 +225,7 @@ Plan **45 to 60 minutes per device** with the person present, after the first tw
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.6.2 | 2026-11-11 | Move-TenantDevices 1.4.5 and 1.4.6: `-LocalAdminPassword` (one safety-net password on every laptop); option 9 also moves a stand-alone PC with a local Windows account (no leave, joins, copies the local profile at first sign-in). |
 | 1.6.1 | 2026-11-11 | Move-TenantDevices 1.4.1 and 1.4.2: option 9's safety-net admin always gets a fresh easy password and is tested before leaving; option 9 downloads the package itself from a private expiring link (`-PackageUrl`, or paste it when asked). |
 | 1.6.0 | 2026-11-11 | Move-TenantDevices 1.4.0: option 9 `-Action MoveInOneGo`, the recommended laptop route. One run while the person is signed in (finds the .ppkg in their Downloads, BitLocker key, safety-net admin, leave, join, restart); a SYSTEM task copies their files at first sign-in and removes itself. |
 | 1.5.0 | 2026-11-10 | Move-TenantDevices 1.3.0: copy (option 6) is the recommended route, handover (option 5) warns first. Copy-ProfileData 1.0.1 counts cloud-only OneDrive placeholders separately. Order: copy each person's OneDrive before moving their laptop. |
