@@ -35,6 +35,12 @@
                                                       permissions, parks the empty new profile. Verified, with rollback.
       6  Copy profile data instead        laptop     Fallback: copies files, old OneDrive, signatures, PSTs, bookmarks
                                                       from the old profile into the new one (Copy-ProfileData.ps1).
+      9  Move this laptop in one go       laptop     RECOMMENDED. Run once while the person is still signed in (Terminal
+                                                      (Admin)): finds the .ppkg (also in their Downloads, from Teams),
+                                                      saves the BitLocker key, creates the safety-net admin (easy
+                                                      password), leaves, joins, sets a one-off task, restarts. At the
+                                                      person's first sign-in with the new email the task copies their
+                                                      files in (option 6 logic) and removes itself. No admin sign-ins.
       7  Clean up this admin PC           admin PC   Removes what option 1 installed or left behind: private designer
                                                       copies, temp files, the sign-in window setting, build logs, and
                                                       (if you confirm) Windows Configuration Designer and the ADK
@@ -42,7 +48,7 @@
 
 .PARAMETER Action
     Skip the menu: BuildPackage, CopyIntune, AutopilotCapture, AutopilotMove, MoveDevice, HandoverProfile, CopyProfile,
-    CleanupAdminPC.
+    CleanupAdminPC, Update, MoveInOneGo (recommended for laptops). AutoCopy is run by the scheduled task.
 
 .PARAMETER SourceTenantId
     Source tenant ID (GUID). CopyIntune and AutopilotMove sign in to it. MoveDevice uses it as a safety check: if
@@ -83,7 +89,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.3.0
+    Version : 1.4.0
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -93,6 +99,9 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.0  2026-11-11  Option 9 / -Action MoveInOneGo: one run on the laptop (leave, join, restart) and a SYSTEM
+                         task that copies the person's files at their first sign-in, then removes itself. Finds the
+                         .ppkg in the person's Downloads. Built after the pilot needed four sign-in switches.
       1.3.0  2026-11-10  Option 6 (copy) is the recommended route; option 5 (handover) warns first. Field result: handover gave
                          the right profile mapping but the first sign-in stuck on a black screen (setup screens); copy worked.
       1.2.5  2026-11-10  Clearing old sign-ins no longer stops on a missing Office registry key (Windows PowerShell stderr).
@@ -141,7 +150,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile', 'CleanupAdminPC', 'Update')]
+    [ValidateSet('Menu', 'BuildPackage', 'CopyIntune', 'AutopilotCapture', 'AutopilotMove', 'MoveDevice', 'HandoverProfile', 'CopyProfile', 'CleanupAdminPC', 'Update', 'MoveInOneGo', 'AutoCopy')]
     [string]$Action = 'Menu',
     [string]$WorkFolder,
     [string]$PackagePath,
@@ -212,6 +221,35 @@ function Test-LocalAdminReady([string]$Name) {
     }
     if (-not $isAdmin) { return "Local admin '$Name' is not a member of the local Administrators group." }
     $null
+}
+function Save-PrepareSnapshot($ds, $profiles) {
+    # BitLocker recovery key, printers, mapped drives and profiles, saved before the laptop leaves the old tenant
+    $snap = Join-Path $WorkFolder "Prepare-$env:COMPUTERNAME-$script:Stamp.txt"
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("Computer $env:COMPUTERNAME  Taken $(Get-Date)  Old tenant $($ds.TenantName) $($ds.TenantId)  DeviceId $($ds.DeviceId)")
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $lines.Add('===== BitLocker C: ====='); try { $lines.AddRange([string[]](manage-bde -protectors -get C: 2>&1 | ForEach-Object { "$_" })) } catch { $lines.Add("manage-bde: $_") }
+    $ErrorActionPreference = $eap
+    $lines.Add('===== Printers ====='); try { Get-Printer | ForEach-Object { $lines.Add("$($_.Name) | $($_.PortName) | $($_.DriverName)") } } catch {}
+    $lines.Add('===== Mapped drives ====='); try { Get-SmbMapping -ErrorAction SilentlyContinue | ForEach-Object { $lines.Add("$($_.LocalPath) -> $($_.RemotePath)") } } catch {}
+    $lines.Add('===== Profiles ====='); $profiles | ForEach-Object { $lines.Add("$($_.Folder) | $($_.Account) | $($_.Sid) | created $($_.Created)") }
+    $lines | Set-Content $snap -Encoding UTF8 -WhatIf:$false
+    if ($lines -match 'Numerical Password') { Write-Ok "BitLocker recovery key saved in $snap. Copy it to your password manager now." } else { Write-Warn2 'No BitLocker recovery password found (BitLocker off, or no recovery protector). Fine if BitLocker is off.' }
+    $snap
+}
+function New-SafetyNetAdmin {
+    # The local admin that gets you back in if the join fails. Easy password, shown once.
+    if (Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue) { Write-Ok "Local admin '$LocalAdminName' already exists (its password is whatever was set before)"; return $true }
+    $plain = New-EasyPassword
+    New-LocalUser -Name $LocalAdminName -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -Description 'Tenant migration safety net' | Out-Null
+    Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalAdminName
+    Write-Host "`n   Safety-net sign-in for this laptop:   .\$LocalAdminName   password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
+    Write-Host '   Write it down. Only needed if something goes wrong. Delete the account once the move is done.' -ForegroundColor Yellow
+    Confirm-Go 'Written it down?' 'Yes' -NoDefault
+}
+function Find-Packages([string[]]$Extra) {
+    $dirs = @($WorkFolder, $PSScriptRoot) + $Extra | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+    @(Get-ChildItem $dirs -Filter *.ppkg -File -ErrorAction SilentlyContinue | Sort-Object FullName -Unique | Sort-Object LastWriteTime -Descending)
 }
 function Get-Profiles {
     Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.LocalPath -like "$env:SystemDrive\Users\*" } | ForEach-Object {
@@ -807,15 +845,7 @@ function Invoke-MoveDevice {
         if (-not $old) { throw "No profile folder '$OldProfile'." }
         Write-Ok "Profile: $($old.Path) ($($old.Account))"
 
-        $snap = Join-Path $WorkFolder "Prepare-$env:COMPUTERNAME-$script:Stamp.txt"
-        $lines = [System.Collections.Generic.List[string]]::new()
-        $lines.Add("Computer $env:COMPUTERNAME  Taken $(Get-Date)  Old tenant $($ds.TenantName) $($ds.TenantId)  DeviceId $($ds.DeviceId)")
-        $lines.Add('===== BitLocker C: ====='); try { $lines.AddRange([string[]](manage-bde -protectors -get C: 2>&1)) } catch { $lines.Add("manage-bde: $_") }
-        $lines.Add('===== Printers ====='); try { Get-Printer | ForEach-Object { $lines.Add("$($_.Name) | $($_.PortName) | $($_.DriverName)") } } catch {}
-        $lines.Add('===== Mapped drives ====='); try { Get-SmbMapping -ErrorAction SilentlyContinue | ForEach-Object { $lines.Add("$($_.LocalPath) -> $($_.RemotePath)") } } catch {}
-        $lines.Add('===== Profiles ====='); $profiles | ForEach-Object { $lines.Add("$($_.Folder) | $($_.Account) | $($_.Sid) | created $($_.Created)") }
-        $lines | Set-Content $snap -Encoding UTF8 -WhatIf:$false
-        if ($lines -match 'Numerical Password') { Write-Ok "BitLocker recovery key saved in $snap. Copy it to your password manager now." } else { Write-Warn2 'No BitLocker recovery password found (BitLocker off, or no recovery protector). Fine if BitLocker is off.' }
+        $snap = Save-PrepareSnapshot $ds $profiles
 
         Invoke-AutopilotCapture
 
@@ -934,6 +964,135 @@ sign in with the person's NEW work account, restart, sign in as .\$($state.Local
     }
     if ((Get-State).Stage -in 'AwaitingFirstSignIn', 'HandoverFailed') { Invoke-HandoverProfile; return }
     if ((Get-State).Stage -eq 'Done') { Write-Ok "This laptop is done. Report: $($state.Report)" }
+}
+
+# ---------------------------------------------------------------- 9. move this laptop in one go (recommended)
+function Invoke-MoveInOneGo {
+    # One run while the person is still signed in: checks, BitLocker key, safety-net admin, leave, join, restart.
+    # A scheduled task then copies their files into the new profile the first time they sign in with the new email.
+    if (-not (Test-Elevated)) { throw 'Run this in Terminal (Admin).' }
+    $state = Get-State
+    if ($state.Stage -notin 'NotStarted', 'PreflightFailed') {
+        Write-Warn2 "This laptop has already started moving (stage: $($state.Stage))."
+        if ($state.Stage -eq 'Left') { Write-Host 'It left the old tenant but did not join the new one. Retrying the join...' -ForegroundColor Cyan; Invoke-MoveDevice }
+        return
+    }
+    $ds = Get-DsregStatus
+    Write-Step 'Move this laptop in one go'
+    if ($ds.DomainJoined -eq 'YES') { throw 'This PC is joined to an on-premises domain. This script is for Microsoft Entra joined devices only.' }
+    if ($ds.AzureAdJoined -ne 'YES') { throw 'This PC is not Microsoft Entra joined. Nothing to leave.' }
+    Write-Ok "Joined to $($ds.TenantName)"
+    if ($SourceTenantId -and $ds.TenantId.Trim('{} ') -ne $SourceTenantId.Trim('{} ')) { throw "STOP: joined to $($ds.TenantName), not the source tenant $SourceTenantId. Nothing changed." }
+    $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1); if ($free -lt 5) { Write-Warn2 "Only $free GB free on C:" }
+
+    # Whose laptop: default is the person signed in at the screen (not the admin who elevated this window)
+    $profiles = @(Get-Profiles)
+    $consoleSid = $null
+    try { $cu = (Get-CimInstance Win32_ComputerSystem).UserName; if ($cu) { $consoleSid = ([Security.Principal.NTAccount]$cu).Translate([Security.Principal.SecurityIdentifier]).Value } } catch {}
+    $cands = @($profiles | Where-Object { $_.Folder -ne $LocalAdminName } | Sort-Object @{ e = { $_.Sid -eq $consoleSid }; Descending = $true }, @{ e = { $_.IsEntra }; Descending = $true }, @{ e = { $_.LastUsed }; Descending = $true })
+    $old = if ($OldProfile) { $profiles | Where-Object { $_.Folder -eq (Split-Path $OldProfile -Leaf) } | Select-Object -First 1 }
+           else { Select-FromList 'Whose laptop is this?' $cands { param($x) '{0,-22} {1,-34} last used {2}' -f $x.Folder, $x.Account, $x.LastUsed } }
+    if (-not $old) { Write-Warn2 'Stopped. Nothing changed.'; return }
+
+    # Package: next to the script, in C:\MigrationBackup, or where Teams/email saved it (their Downloads or Desktop)
+    $found = if ($PackagePath) { @(Get-Item $PackagePath) } else { Find-Packages @((Join-Path $old.Path 'Downloads'), (Join-Path $old.Path 'Desktop')) }
+    if (-not $found) { throw "No .ppkg found. Save the package from Teams or email (Downloads is fine) and run this again. Nothing changed." }
+    $pkg = if ($found.Count -eq 1) { $found[0] } else { Select-FromList 'Which package joins the new tenant?' $found { param($x) '{0}   ({1})' -f $x.Name, $x.LastWriteTime } }
+    if (-not $pkg) { Write-Warn2 'Stopped. Nothing changed.'; return }
+    if ($pkg.DirectoryName -ne $WorkFolder) { Copy-Item $pkg.FullName $WorkFolder -Force; $pkg = Get-Item (Join-Path $WorkFolder $pkg.Name) }
+    Write-Ok "Package: $($pkg.Name)"
+
+    # Everything the scheduled task needs must be in the work folder
+    $self = Join-Path $WorkFolder 'Move-TenantDevices.ps1'
+    if ($PSCommandPath -ne $self) { Copy-Item $PSCommandPath $self -Force }
+    $cp = Join-Path $WorkFolder 'Copy-ProfileData.ps1'
+    if (-not (Test-Path $cp)) { $src = Join-Path $PSScriptRoot 'Copy-ProfileData.ps1'; if (Test-Path $src) { Copy-Item $src $cp } else { Invoke-WebRequest "$script:Repo/Copy-ProfileData.ps1" -OutFile $cp -UseBasicParsing } }
+
+    $snap = Save-PrepareSnapshot $ds $profiles
+    if (-not (New-SafetyNetAdmin)) { Write-Warn2 'Stopped. Nothing changed apart from the safety-net account.'; return }
+    $whyNot = Test-LocalAdminReady $LocalAdminName
+    if ($whyNot) { throw "STOP: $whyNot Not leaving the tenant without another way in." }
+
+    Write-Host @"
+
+   Computer : $env:COMPUTERNAME
+   Person   : $($old.Account)  ($($old.Path))
+   Leaves   : $($ds.TenantName)
+   Joins    : the tenant in $($pkg.Name)
+   Then     : restarts. The person signs in with their NEW email; their files are copied in automatically.
+"@ -ForegroundColor Cyan
+    if (-not (Confirm-Go "Move $env:COMPUTERNAME now?" 'Yes, move it' -NoDefault)) { Write-Warn2 'Stopped. Nothing changed (the safety-net account stays).'; return }
+
+    Set-State ([pscustomobject]@{ Stage = 'Prepared'; Mode = 'OneGo'; OldProfile = $old.Folder; OldSid = $old.Sid; OldPath = $old.Path; OldTenantId = $ds.TenantId; OldTenantName = $ds.TenantName; OldDeviceId = $ds.DeviceId; Snapshot = $snap; LocalAdmin = $LocalAdminName; Package = $pkg.FullName })
+    Register-AutoCopyTask
+
+    $live = Get-DsregStatus
+    if ($live.TenantId -ne $ds.TenantId) { throw 'The join state changed while this ran. Nothing left; check dsregcmd /status.' }
+    dsregcmd /leave | Out-Null
+    Start-Sleep 5
+    if ((Get-DsregStatus).AzureAdJoined -eq 'YES') { throw 'dsregcmd /leave did not take. Nothing else changed. Try again from Terminal (Admin).' }
+    Add-State 'Stage' 'Left'
+    Write-Ok "Left $($ds.TenantName)"
+
+    Import-Module Provisioning -ErrorAction Stop
+    try { Install-ProvisioningPackage -PackagePath $pkg.FullName -QuietInstall -ForceInstall | Out-Null } catch { Write-Warn2 "Package install reported: $($_.Exception.Message)" }
+    $joined = $false
+    for ($i = 0; $i -lt 12 -and -not $joined; $i++) { Start-Sleep 10; $after = Get-DsregStatus; $joined = $after.AzureAdJoined -eq 'YES' }
+    if ($joined) { Add-State 'Stage' 'Joined'; Add-State 'NewTenantId' $after.TenantId; Write-Ok "Joined $($after.TenantName)" }
+    else { Write-Warn2 "Join not confirmed yet; it often finishes during the restart. If the new email can't sign in afterwards: sign in as .\$LocalAdminName and run  C:/MigrationBackup/Move-TenantDevices.ps1 -Action MoveDevice" }
+
+    Write-Host @"
+
+   Restarting in 60 seconds.
+   After the restart: "Other user", sign in with the NEW email and password.
+   Their files are copied in by themselves within a few minutes of that first sign-in
+   (a message pops up when it's done). Then: OneDrive, Outlook and Teams sign-in once.
+"@ -ForegroundColor Green
+    shutdown.exe /r /t 60 /c "Moving this laptop to the new organisation. After the restart, sign in with your NEW email address." | Out-Null
+}
+
+function Register-AutoCopyTask {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$WorkFolder\Move-TenantDevices.ps1`" -Action AutoCopy -WorkFolder `"$WorkFolder`""
+    $act = New-ScheduledTaskAction -Execute $ps -Argument $arg
+    $trg = New-ScheduledTaskTrigger -AtLogOn
+    $prn = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+    $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName 'TenantMove-CopyProfile' -Action $act -Trigger $trg -Principal $prn -Settings $set -Force | Out-Null
+    Write-Ok 'Set up the automatic file copy for the first sign-in'
+}
+
+function Invoke-AutoCopy {
+    # Runs as SYSTEM at every sign-in until it has copied once. Waits for a new Entra profile (not the old one,
+    # not the local admin), then copies the old profile's files into it and removes itself.
+    $log = Join-Path $WorkFolder 'AutoCopy.log'
+    Start-Transcript -Path $log -Append | Out-Null
+    try {
+        $state = Get-State
+        if (-not $state.OldSid) { Write-Host 'No move recorded on this laptop.'; return }
+        if ($state.Stage -eq 'Done') { Unregister-ScheduledTask -TaskName 'TenantMove-CopyProfile' -Confirm:$false -ErrorAction SilentlyContinue; return }
+        if ((Get-DsregStatus).AzureAdJoined -ne 'YES') { Write-Host 'Not joined to the new tenant yet. Waiting for the next sign-in.'; return }
+        if ($state.Stage -ne 'Joined') { Add-State 'Stage' 'Joined' }
+        $new = $null; $until = (Get-Date).AddMinutes(15)
+        while (-not $new -and (Get-Date) -lt $until) {
+            $new = Get-Profiles | Where-Object { $_.IsEntra -and $_.Loaded -and $_.Sid -ne $state.OldSid -and $_.Path -ne $state.OldPath -and $_.Folder -ne $state.LocalAdmin } | Sort-Object Created | Select-Object -Last 1
+            if ($new -and -not (Test-Path (Join-Path $new.Path 'Desktop'))) { $new = $null }
+            if (-not $new) { Start-Sleep 15 }
+        }
+        if (-not $new) { Write-Host 'No new work account signed in (maybe the local admin). Waiting for the next sign-in.'; return }
+        Write-Host "New profile: $($new.Path) ($($new.Account)). Copying from $($state.OldPath)."
+        Start-Sleep 60   # let Explorer and OneDrive finish first sign-in
+        $cp = Join-Path $WorkFolder 'Copy-ProfileData.ps1'
+        & $cp -OldProfile $state.OldProfile -NewProfile $new.Folder -BackupFolder $WorkFolder -Confirm:$false
+        Add-State 'NewProfile' $new.Folder
+        Add-State 'Stage' 'Done'
+        Invoke-BitLockerBackup
+        Unregister-ScheduledTask -TaskName 'TenantMove-CopyProfile' -Confirm:$false -ErrorAction SilentlyContinue
+        try { msg.exe * /TIME:0 "Your files from before the move are in place: Desktop, Documents, Downloads, Pictures, bookmarks. Anything else from your old OneDrive folder is in 'From old profile' in your user folder. Now sign in to OneDrive, Outlook and Teams once with your new email." } catch {}
+        Write-Host 'Done.'
+    }
+    catch { Write-Host "AutoCopy problem: $($_.Exception.Message)" }
+    finally { Stop-Transcript | Out-Null }
 }
 
 # ---------------------------------------------------------------- 5. profile handover
@@ -1149,8 +1308,9 @@ if ($Action -eq 'Menu') {
    1  Build the enrolment package for the destination tenant
    2  Copy Intune configuration from source to destination
    3  Autopilot: capture this device's hash / move hashes
-  Laptop being moved only (run as administrator; never option 4 on your own PC)
-   4  Move this laptop to the new tenant (staged, re-run after each restart)
+  Laptop being moved only (Terminal (Admin); never on your own PC)
+   9  Move this laptop in one go (RECOMMENDED: one run, restarts, files copied at first sign-in)
+   4  Move this laptop step by step (staged, re-run after each restart)
    5  Hand the old profile to the new account (after first sign-in)
    6  Copy profile data into the new profile instead (fallback)
   Admin PC, when you are finished
@@ -1158,7 +1318,7 @@ if ($Action -eq 'Menu') {
    8  Update this script to the latest version
    0  Exit
 "@ -ForegroundColor Cyan
-    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6', '7', '8')) {
+    switch (Read-Choice 'Choose' @('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')) {
         '1' { $Action = 'BuildPackage' }
         '2' { $Action = 'CopyIntune' }
         '3' { $Action = if ((Read-Choice 'Capture this device (C) or move captured hashes between tenants (M)?' @('C', 'M', 'c', 'm')) -in 'C', 'c') { 'AutopilotCapture' } else { 'AutopilotMove' } }
@@ -1167,6 +1327,7 @@ if ($Action -eq 'Menu') {
         '6' { $Action = 'CopyProfile' }
         '7' { $Action = 'CleanupAdminPC' }
         '8' { $Action = 'Update' }
+        '9' { $Action = 'MoveInOneGo' }
         default { return }
     }
 }
@@ -1180,4 +1341,6 @@ switch ($Action) {
     'CopyProfile'      { Invoke-CopyProfile }
     'CleanupAdminPC'   { Invoke-CleanupAdminPC }
     'Update'           { Invoke-SelfUpdate }
+    'MoveInOneGo'      { Invoke-MoveInOneGo }
+    'AutoCopy'         { Invoke-AutoCopy }
 }
