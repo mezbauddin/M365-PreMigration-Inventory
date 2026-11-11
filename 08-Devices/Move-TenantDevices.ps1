@@ -89,7 +89,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.4.0
+    Version : 1.4.1
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -99,6 +99,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.1  2026-11-11  Option 9: safety-net admin always gets a fresh easy password (reset if left over), is checked
+                         for enabled + Administrators, and the password is tested before the laptop leaves.
       1.4.0  2026-11-11  Option 9 / -Action MoveInOneGo: one run on the laptop (leave, join, restart) and a SYSTEM
                          task that copies the person's files at their first sign-in, then removes itself. Finds the
                          .ppkg in the person's Downloads. Built after the pilot needed four sign-in switches.
@@ -238,12 +240,32 @@ function Save-PrepareSnapshot($ds, $profiles) {
     $snap
 }
 function New-SafetyNetAdmin {
-    # The local admin that gets you back in if the join fails. Easy password, shown once.
-    if (Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue) { Write-Ok "Local admin '$LocalAdminName' already exists (its password is whatever was set before)"; return $true }
+    # The local admin that gets you back in if the join fails. Always a fresh, easy password (read it out on a call:
+    # "Move, four eight two one, exclamation mark"), even if the account was left over from an earlier attempt,
+    # so nobody is ever stuck with a password they don't know.
     $plain = New-EasyPassword
-    New-LocalUser -Name $LocalAdminName -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -Description 'Tenant migration safety net' | Out-Null
-    Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalAdminName
-    Write-Host "`n   Safety-net sign-in for this laptop:   .\$LocalAdminName   password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
+    $sec = ConvertTo-SecureString $plain -AsPlainText -Force
+    $u = Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue
+    if ($u) {
+        Set-LocalUser -Name $LocalAdminName -Password $sec -PasswordNeverExpires $true
+        if (-not $u.Enabled) { Enable-LocalUser -Name $LocalAdminName }
+        Write-Ok "Local admin '$LocalAdminName' already existed: password reset to the one below"
+    }
+    else {
+        New-LocalUser -Name $LocalAdminName -Password $sec -PasswordNeverExpires -AccountNeverExpires -Description 'Tenant migration safety net' | Out-Null
+        Write-Ok "Local admin '$LocalAdminName' created"
+    }
+    if ((Test-LocalAdminReady $LocalAdminName) -like '*not a member*') { Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalAdminName }
+    $why = Test-LocalAdminReady $LocalAdminName
+    if ($why) { throw "STOP: $why Nothing else changed." }
+    Write-Ok "'$LocalAdminName' is enabled and in the local Administrators group"
+    # Prove the password works by running a tiny process as that account (Secondary Logon). Not every PC allows it.
+    try {
+        $cred = New-Object System.Management.Automation.PSCredential (".\$LocalAdminName", $sec)
+        $pr = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c exit 0' -Credential $cred -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+        if ($pr.ExitCode -eq 0) { Write-Ok "Password tested: '$LocalAdminName' can sign in" }
+    } catch { Write-Warn2 "Couldn't test the password automatically ($($_.Exception.Message)). The account is set; it will work at the sign-in screen." }
+    Write-Host "`n   Safety-net sign-in for this laptop:   .\$LocalAdminName     password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
     Write-Host '   Write it down. Only needed if something goes wrong. Delete the account once the move is done.' -ForegroundColor Yellow
     Confirm-Go 'Written it down?' 'Yes' -NoDefault
 }
