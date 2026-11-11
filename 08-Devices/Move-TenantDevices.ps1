@@ -94,7 +94,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.4.3
+    Version : 1.4.4
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -104,6 +104,7 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.4  2026-11-11  Repo drop: enrolment.ppkg at the top level or in temp/.
       1.4.3  2026-11-11  Option 9 also looks for a short-lived package at temp/enrolment.ppkg in the repo.
       1.4.2  2026-11-11  Option 9 downloads the package itself from a private expiring link (-PackageUrl, or paste it
                          when asked). No manual file copying.
@@ -1048,10 +1049,13 @@ function Invoke-MoveInOneGo {
              elseif ($PackageUrl) { @(Get-PackageFromUrl $PackageUrl) }
              else { Find-Packages @((Join-Path $old.Path 'Downloads'), (Join-Path $old.Path 'Desktop'), (Join-Path $old.Path 'OneDrive*\Desktop')) }
     if (-not $found) {
-        # Optional short-lived drop in the repo: temp/enrolment.ppkg. Delete it, and the package_<guid> account in the
+        # Optional short-lived drop in the repo: enrolment.ppkg (top level or temp/). Delete it, and the package_<guid> account in the
         # destination (that kills the token everywhere, history included), as soon as the last laptop is done.
-        $drop = ($script:Repo -replace '/08-Devices$', '') + '/temp/enrolment.ppkg'
-        try { $found = @(Get-PackageFromUrl $drop) } catch { Write-Warn2 "No package in the repo drop ($drop)." }
+        $root = $script:Repo -replace '/08-Devices$', ''
+        foreach ($drop in "$root/enrolment.ppkg", "$root/temp/enrolment.ppkg") {
+            if ($found) { break }
+            try { $found = @(Get-PackageFromUrl $drop) } catch { Write-Warn2 "No package at $drop" }
+        }
     }
     if (-not $found) {
         Write-Host 'No package on this laptop yet. Paste its download link (right-click to paste), or press Enter to stop.' -ForegroundColor Yellow
