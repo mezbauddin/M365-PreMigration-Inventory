@@ -65,6 +65,11 @@
     Option 1 only: rename laptops on join, for example TG-%SERIAL% (15 characters at most once expanded).
     Default: keep their names.
 
+.PARAMETER PackageUrl
+    Option 9: a private, expiring download link to the .ppkg (OneDrive/SharePoint "Anyone with the link" with an
+    expiry date, or an Azure blob SAS URL). The script downloads the package itself. If no package is found and this
+    isn't given, option 9 asks you to paste the link. Never put the package in a public repo: it joins any device.
+
 .PARAMETER AllowWizard
     Option 1 only: if the silent build fails, open the Windows Configuration Designer wizard instead of stopping.
     Off by default, so option 1 is no-touch.
@@ -89,7 +94,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.4.1
+    Version : 1.4.2
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -99,6 +104,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.2  2026-11-11  Option 9 downloads the package itself from a private expiring link (-PackageUrl, or paste it
+                         when asked). No manual file copying.
       1.4.1  2026-11-11  Option 9: safety-net admin always gets a fresh easy password (reset if left over), is checked
                          for enabled + Administrators, and the password is tested before the laptop leaves.
       1.4.0  2026-11-11  Option 9 / -Action MoveInOneGo: one run on the laptop (leave, join, restart) and a SYSTEM
@@ -156,6 +163,7 @@ param(
     [string]$Action = 'Menu',
     [string]$WorkFolder,
     [string]$PackagePath,
+    [string]$PackageUrl,
     [string]$OldProfile,
     [string]$NewProfile,
     [string]$SourceTenantId,
@@ -268,6 +276,24 @@ function New-SafetyNetAdmin {
     Write-Host "`n   Safety-net sign-in for this laptop:   .\$LocalAdminName     password:  $plain`n" -ForegroundColor Black -BackgroundColor Yellow
     Write-Host '   Write it down. Only needed if something goes wrong. Delete the account once the move is done.' -ForegroundColor Yellow
     Confirm-Go 'Written it down?' 'Yes' -NoDefault
+}
+function Get-PackageFromUrl([string]$Url) {
+    # Downloads the .ppkg from a private link. OneDrive/SharePoint sharing links need download=1 to return the file.
+    $Url = $Url.Trim().Trim('"', "'", '<', '>')
+    if ($Url -match 'sharepoint\.com|1drv\.ms' -and $Url -notmatch '[?&]download=1') { $Url += $(if ($Url -match '\?') { '&download=1' } else { '?download=1' }) }
+    $dest = Join-Path $WorkFolder 'enrolment.ppkg'
+    Write-Host 'Downloading the enrolment package...' -ForegroundColor Cyan
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest $Url -OutFile $dest -UseBasicParsing -MaximumRedirection 10
+    $f = Get-Item $dest
+    $head = [IO.File]::ReadAllBytes($dest) | Select-Object -First 64
+    $text = -join ($head | ForEach-Object { [char]$_ })
+    if ($f.Length -lt 2048 -or $text -match '<!DOCTYPE|<html') {
+        Remove-Item $dest -Force
+        throw 'That link returned a web page, not the package. Use a link anyone can open (OneDrive: Share > Anyone with the link, with an expiry date), or an Azure blob SAS URL. Nothing changed.'
+    }
+    Write-Ok "Package downloaded ($([math]::Round($f.Length / 1KB)) KB)"
+    $f
 }
 function Find-Packages([string[]]$Extra) {
     $dirs = @($WorkFolder, $PSScriptRoot) + $Extra | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
@@ -1017,8 +1043,15 @@ function Invoke-MoveInOneGo {
     if (-not $old) { Write-Warn2 'Stopped. Nothing changed.'; return }
 
     # Package: next to the script, in C:\MigrationBackup, or where Teams/email saved it (their Downloads or Desktop)
-    $found = if ($PackagePath) { @(Get-Item $PackagePath) } else { Find-Packages @((Join-Path $old.Path 'Downloads'), (Join-Path $old.Path 'Desktop')) }
-    if (-not $found) { throw "No .ppkg found. Save the package from Teams or email (Downloads is fine) and run this again. Nothing changed." }
+    $found = if ($PackagePath) { @(Get-Item $PackagePath) }
+             elseif ($PackageUrl) { @(Get-PackageFromUrl $PackageUrl) }
+             else { Find-Packages @((Join-Path $old.Path 'Downloads'), (Join-Path $old.Path 'Desktop'), (Join-Path $old.Path 'OneDrive*\Desktop')) }
+    if (-not $found) {
+        Write-Host 'No package on this laptop yet. Paste its download link (right-click to paste), or press Enter to stop.' -ForegroundColor Yellow
+        $u = Read-Host 'Package link'
+        if (-not $u) { Write-Warn2 'Stopped. Nothing changed.'; return }
+        $found = @(Get-PackageFromUrl $u)
+    }
     $pkg = if ($found.Count -eq 1) { $found[0] } else { Select-FromList 'Which package joins the new tenant?' $found { param($x) '{0}   ({1})' -f $x.Name, $x.LastWriteTime } }
     if (-not $pkg) { Write-Warn2 'Stopped. Nothing changed.'; return }
     if ($pkg.DirectoryName -ne $WorkFolder) { Copy-Item $pkg.FullName $WorkFolder -Force; $pkg = Get-Item (Join-Path $WorkFolder $pkg.Name) }
