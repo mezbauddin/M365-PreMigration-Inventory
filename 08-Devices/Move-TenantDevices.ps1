@@ -65,6 +65,10 @@
     Option 1 only: rename laptops on join, for example TG-%SERIAL% (15 characters at most once expanded).
     Default: keep their names.
 
+.PARAMETER LocalAdminPassword
+    Option 9: use this password for the safety-net admin instead of making one up, so every laptop has the same
+    one. Pick your own for each project (never a default from this repo) and delete the account afterwards.
+
 .PARAMETER PackageUrl
     Option 9: a private, expiring download link to the .ppkg (OneDrive/SharePoint "Anyone with the link" with an
     expiry date, or an Azure blob SAS URL). The script downloads the package itself. If no package is found and this
@@ -94,7 +98,7 @@
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
-    Version : 1.4.4
+    Version : 1.4.5
     Date    : 2026-11-10
     Licence : MIT
     Repo    : https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit
@@ -104,6 +108,8 @@
               Microsoft doesn't document. If it stops working, the script opens WCD for you instead. Options 2, 3 and 5
               are tested against stubbed tenants and devices; run them with -WhatIf first on anything that matters.
     Changelog:
+      1.4.5  2026-11-11  -LocalAdminPassword: same safety-net password on every laptop. Password shown again before
+                         the restart.
       1.4.4  2026-11-11  Repo drop: enrolment.ppkg at the top level or in temp/.
       1.4.3  2026-11-11  Option 9 also looks for a short-lived package at temp/enrolment.ppkg in the repo.
       1.4.2  2026-11-11  Option 9 downloads the package itself from a private expiring link (-PackageUrl, or paste it
@@ -175,6 +181,7 @@ param(
     [string]$ExportFolder,
     [string]$GroupMappingFile,
     [string]$LocalAdminName = 'migadmin',
+    [string]$LocalAdminPassword,
     [string]$PackageName,
     [ValidateRange(1, 180)][int]$TokenDays = 180,
     [string]$RenamePattern,
@@ -253,7 +260,8 @@ function New-SafetyNetAdmin {
     # The local admin that gets you back in if the join fails. Always a fresh, easy password (read it out on a call:
     # "Move, four eight two one, exclamation mark"), even if the account was left over from an earlier attempt,
     # so nobody is ever stuck with a password they don't know.
-    $plain = New-EasyPassword
+    $plain = if ($LocalAdminPassword) { $LocalAdminPassword } else { New-EasyPassword }
+    $script:SafetyNetPassword = $plain
     $sec = ConvertTo-SecureString $plain -AsPlainText -Force
     $u = Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue
     if ($u) {
@@ -1108,6 +1116,8 @@ function Invoke-MoveInOneGo {
     else { Write-Warn2 "Join not confirmed yet; it often finishes during the restart. If the new email can't sign in afterwards: sign in as .\$LocalAdminName and run  C:/MigrationBackup/Move-TenantDevices.ps1 -Action MoveDevice" }
 
     Write-Host @"
+
+   Safety-net sign-in (only if needed):  .\$LocalAdminName   $script:SafetyNetPassword
 
    Restarting in 60 seconds.
    After the restart: "Other user", sign in with the NEW email and password.
