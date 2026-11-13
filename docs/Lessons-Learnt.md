@@ -21,7 +21,7 @@ If you read nothing else:
 4. Every script that changes a tenant takes `-AdminUpn`. Use it.
 5. One version of every Microsoft.Graph module, and a fresh PowerShell window per task.
 6. After cutover, rebuild the user mapping before any OneDrive copy or incremental.
-7. Check whether the source uses Intune at all before you plan the devices, and hand each person's old Windows profile over rather than copying it.
+7. Check whether the source uses Intune at all before you plan the devices. Copy each person's OneDrive first, then move their laptop in one go (08 option 9): their files are copied into the new profile at first sign-in.
 
 ## Before the night
 
@@ -214,16 +214,34 @@ If you read nothing else:
 
 **Tip:** look before you plan. Intune admin centre, Devices, All devices, in the source. Empty means option 2 is a five-minute job.
 
-### Keep the old profile, hand it over
+### Don't hand the old profile over: copy into the new one
 
 | | |
 | --- | --- |
-| What happened | Joining the destination gave each person a new, empty Windows profile. Copying files across left desktop layout, app settings and taskbar behind |
-| Impact | People spent their first morning rebuilding their laptop instead of working |
-| Fix | Pointed the new account at the old profile folder and gave it ownership, files and registry hives. The empty profile was parked, not deleted, as the way back |
-| Now handled by | [08 Move-TenantDevices.ps1](../08-Devices/) option 5, with rollback; option 6 (`Copy-ProfileData.ps1`) only as the fallback |
+| What happened | The pilot handed the old Windows profile to the new account. Ownership, permissions and hives were right, but the first sign-in hung on a black screen while Windows' per-user setup (UserOOBEBroker, Windows Hello) ran against a reused profile |
+| Impact | One person off work for an afternoon; rolled back and copied instead |
+| Fix | Let Windows build a fresh profile for the new account and copy the files in. Most of the data was cloud-only in OneDrive anyway |
+| Now handled by | [08 Move-TenantDevices.ps1](../08-Devices/) option 9 copies automatically at first sign-in; option 5 now warns before it runs |
 
-**Trap:** don't delete the old profile to "tidy up" before the handover. It is the person's data and your rollback.
+**Trap:** don't delete the old profile to "tidy up". It is the person's data and your fallback for 30 days.
+
+### Move each laptop in one remote session
+
+| | |
+| --- | --- |
+| What happened | The staged route needed a local-admin sign-in after every restart. Quick Assist dropped at each one, couldn't pass the clipboard, and hid every admin prompt |
+| Impact | The pilot laptop took most of a day |
+| Fix | Do all the hands-on work in the person's own session before a single restart; a one-off SYSTEM task copies their files at first sign-in |
+| Now handled by | [08 Move-TenantDevices.ps1](../08-Devices/) option 9. The other laptops took about 10 minutes each |
+
+### OneDrive files that look present but aren't
+
+| | |
+| --- | --- |
+| What happened | The local copy reported 40 GB of OneDrive files. Only 2 MB was really on the disk: the rest were cloud-only placeholders |
+| Impact | A person signed in to empty folders until their OneDrive copy ran |
+| Fix | Copy each person's OneDrive tenant to tenant **before** their laptop moves |
+| Now handled by | [Copy-PeopleOneDrives.ps1](../copy-options/B-ShareGate/) (finds both OneDrive URLs by owner); Copy-ProfileData 1.0.1 counts placeholders separately |
 
 ### BitLocker keys missing from Entra ID
 
@@ -238,6 +256,7 @@ If you read nothing else:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2.0 | 2026-11-13 | Devices: copy into the new profile instead of handing it over, one remote session per laptop, cloud-only OneDrive placeholders |
 | 1.1.0 | 2026-11-10 | Devices: no Intune in the source, hand the profile over, BitLocker keys missing from Entra ID |
 | 1.0.1 | 2026-11-10 | Readiness and blocker steps match the cutover runbook. Job details generalised |
 | 1.0.0 | 2026-11-10 | First version, written the morning after cutover |
